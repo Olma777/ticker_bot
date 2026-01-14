@@ -3,6 +3,13 @@ import aiohttp
 import asyncio
 from dotenv import load_dotenv
 
+# Пытаемся проверить, установился ли Brotli
+try:
+    import brotli
+    HAS_BROTLI = True
+except ImportError:
+    HAS_BROTLI = False
+
 load_dotenv()
 API_KEY = os.getenv("CRYPTO_PANIC_KEY")
 
@@ -11,7 +18,6 @@ async def get_crypto_news(ticker):
         return "⚠️ Ошибка: Не найден ключ API новостей."
 
     clean_key = API_KEY.strip().replace("'", "").replace('"', "")
-    
     url = "https://cryptopanic.com/api/v1/posts/"
     
     params = {
@@ -22,41 +28,51 @@ async def get_crypto_news(ticker):
         "public": "true"
     }
 
-    # ЧИСТЫЕ ЗАГОЛОВКИ (Без лишнего мусора, который вызывает 502)
+    # Формируем список форматов, которые мы понимаем
+    # Если Brotli установлен - просим его. Если нет - только gzip.
+    encoding = "gzip, deflate, br" if HAS_BROTLI else "gzip, deflate"
+
+    # ТЕ САМЫЕ ЗАГОЛОВКИ, КОТОРЫЕ РАБОТАЛИ (Chrome)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json", 
-        "Referer": "https://cryptopanic.com/",
-        "Origin": "https://cryptopanic.com"
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": encoding, 
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1"
     }
 
     timeout = aiohttp.ClientTimeout(total=10)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Мы не указываем Accept-Encoding вручную! aiohttp сама подставит gzip/brotli
             async with session.get(url, params=params, headers=headers) as response:
                 
+                # Если сайт снова блокирует (404/502/403)
                 if response.status != 200:
-                    return f"⚠️ Ошибка доступа к сайту: {response.status}"
+                    return f"⚠️ Ошибка доступа к сайту: {response.status} (Попробуй другой тикер)"
 
-                data = await response.json()
+                try:
+                    data = await response.json()
+                except Exception as e:
+                    # Если пришел HTML или мусор
+                    return f"⚠️ Ошибка чтения данных. Brotli установлен: {HAS_BROTLI}. Ошибка: {e}"
                 
                 if not data.get("results"):
                     return f"📭 Новостей по {ticker} пока нет."
 
                 news_list = data["results"][:5]
-                text = f"📰 <b>Срочно по {ticker}:</b>\n\n"
+                text = f"📰 <b>Новости {ticker}:</b>\n\n"
 
                 for news in news_list:
-                    title = news["title"]
-                    # Очистка заголовка от спецсимволов HTML
-                    title = title.replace("<", "").replace(">", "")
-                    
+                    title = news["title"].replace("<", "").replace(">", "")
                     slug = news.get('slug', 'news')
                     news_id = news.get('id', '0')
                     domain = news.get('domain', 'cryptopanic.com')
-                    
                     link = f"https://cryptopanic.com/news/{news_id}/{slug}"
                     
                     if len(title) > 120:
@@ -67,6 +83,6 @@ async def get_crypto_news(ticker):
                 return text
 
     except asyncio.TimeoutError:
-        return "⚠️ Сайт новостей долго не отвечает."
+        return "⚠️ Сайт долго не отвечает."
     except Exception as e:
-        return f"⚠️ Внутренняя ошибка: {str(e)}"
+        return f"⚠️ Критическая ошибка: {str(e)}"
