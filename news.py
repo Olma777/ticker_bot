@@ -11,6 +11,7 @@ async def get_crypto_news(ticker):
         return "⚠️ Ошибка: Не найден ключ API новостей."
 
     clean_key = API_KEY.strip().replace("'", "").replace('"', "")
+    
     url = "https://cryptopanic.com/api/v1/posts/"
     
     params = {
@@ -21,32 +22,26 @@ async def get_crypto_news(ticker):
         "public": "true"
     }
 
+    # ЧИСТЫЕ ЗАГОЛОВКИ (Без лишнего мусора, который вызывает 502)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json", # Строго просим JSON
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br", # Мы установили brotli, так что можно!
-        "Connection": "keep-alive"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json", 
+        "Referer": "https://cryptopanic.com/",
+        "Origin": "https://cryptopanic.com"
     }
 
     timeout = aiohttp.ClientTimeout(total=10)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Мы не указываем Accept-Encoding вручную! aiohttp сама подставит gzip/brotli
             async with session.get(url, params=params, headers=headers) as response:
                 
-                # 1. Если статус не 200 (ОК)
                 if response.status != 200:
                     return f"⚠️ Ошибка доступа к сайту: {response.status}"
 
-                # 2. Пытаемся прочитать JSON
-                try:
-                    data = await response.json()
-                except:
-                    # Если сайт прислал HTML вместо JSON - это защита Cloudflare
-                    return "⚠️ Сайт включил защиту (Cloudflare). Новости временно недоступны."
+                data = await response.json()
                 
-                # 3. Если в JSON пусто
                 if not data.get("results"):
                     return f"📭 Новостей по {ticker} пока нет."
 
@@ -55,7 +50,7 @@ async def get_crypto_news(ticker):
 
                 for news in news_list:
                     title = news["title"]
-                    # Чистим заголовок от угловых скобок, чтобы не ломать HTML телеграма
+                    # Очистка заголовка от спецсимволов HTML
                     title = title.replace("<", "").replace(">", "")
                     
                     slug = news.get('slug', 'news')
