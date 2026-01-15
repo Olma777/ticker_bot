@@ -6,7 +6,8 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand
 
-from data import get_crypto_price
+# ВАЖНО: Теперь мы импортируем из prices, а не data
+from prices import get_crypto_price
 from analysis import get_crypto_analysis, get_sniper_analysis
 
 load_dotenv()
