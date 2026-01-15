@@ -21,7 +21,7 @@ async def setup_bot_commands():
     commands = [
         BotCommand(command="/start", description="Перезапуск бота"),
         BotCommand(command="/sniper", description="Трейдинг (Маркетмейкер)"),
-        BotCommand(command="/audit", description="🛡 Аудит проекта (Риски)"), # Новая команда
+        BotCommand(command="/audit", description="Аудит (Риски и Потенциал)"),
     ]
     await bot.set_my_commands(commands)
 
@@ -30,69 +30,70 @@ async def cmd_start(message: types.Message):
     user_name = message.from_user.first_name
     await message.answer(
         f"👋 <b>Привет, {user_name}!</b>\n\n"
-        "Я твой профессиональный крипто-терминал.\n\n"
-        "👇 <b>Доступные инструменты:</b>\n\n"
-        "1️⃣ <b>Котировки (Live):</b>\n"
+        "Я твой <b>AI-терминал V2.0</b>.\n\n"
+        "👇 <b>Меню:</b>\n\n"
+        "1️⃣ <b>Котировки:</b>\n"
         "Просто отправь тикер (<code>SOL</code>) — покажу цену и рейтинг.\n\n"
-        "2️⃣ <b>Свинг-Трейдинг (Setup):</b>\n"
+        "2️⃣ <b>Свинг-Трейдинг:</b>\n"
         "Команда <code>/sniper SOL</code>\n"
-        "<i>Поиск манипуляций, уровней ликвидности и точек входа для торговли.</i>\n\n"
-        "3️⃣ <b>Аудит Проекта (Security):</b>\n"
+        "<i>Ищет манипуляции, ликвидность и дает сетап на вход.</i>\n\n"
+        "3️⃣ <b>Аудит Проекта:</b>\n"
         "Команда <code>/audit SOL</code>\n"
-        "<i>Проверка на скам, анализ команды, токеномики и долгосрочных рисков.</i>\n\n"
-        "🚀 <b>Жду тикер!</b>",
+        "<i>Проверка на скам, анализ команды и рисков.</i>",
         parse_mode="HTML"
     )
 
-# --- SNIPER (Трейдинг) ---
+# --- SNIPER ---
 @dp.message(Command("sniper"))
 async def sniper_handler(message: types.Message):
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("⚠️ Укажи тикер. Пример: <code>/sniper ETH</code>", parse_mode="HTML")
+        await message.answer("⚠️ Пример: <code>/sniper BTC</code>", parse_mode="HTML")
         return
 
     ticker = args[1].upper()
-    loading_msg = await message.answer(f"🎯 <b>{ticker}</b>: Сканирую рынок и ищу вход...", parse_mode="HTML")
+    loading_msg = await message.answer(f"🎯 <b>{ticker}</b>: Анализирую рынок...", parse_mode="HTML")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     info, error = await get_crypto_price(ticker)
     
     if error:
         await loading_msg.delete()
-        await message.answer(f"❌ Не удалось найти данные для {ticker}.")
+        await message.answer(f"❌ Тикер {ticker} не найден.")
         return
 
+    # Передаем: Тикер, Имя, Цену
     analysis_text = await get_sniper_analysis(ticker, info['name'], info['price'])
 
     await loading_msg.delete()
-    await message.answer(analysis_text, parse_mode="Markdown")
+    await message.answer(analysis_text, parse_mode="HTML")
 
-# --- AUDIT (Аудит и Риски) ---
+# --- AUDIT ---
 @dp.message(Command("audit"))
 async def audit_handler(message: types.Message):
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("⚠️ Укажи тикер. Пример: <code>/audit BTC</code>", parse_mode="HTML")
+        await message.answer("⚠️ Пример: <code>/audit BTC</code>", parse_mode="HTML")
         return
 
     ticker = args[1].upper()
-    loading_msg = await message.answer(f"🛡 <b>{ticker}</b>: Проверяю безопасность и токеномику...", parse_mode="HTML")
+    loading_msg = await message.answer(f"🛡 <b>{ticker}</b>: Проверяю безопасность...", parse_mode="HTML")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     info, error = await get_crypto_price(ticker)
     
     if error:
         await loading_msg.delete()
-        await message.answer(f"❌ Не удалось найти данные для {ticker}.")
+        await message.answer(f"❌ Тикер {ticker} не найден.")
         return
 
+    # Передаем: Тикер, Имя
     analysis_text = await get_crypto_analysis(ticker, info['name'])
 
     await loading_msg.delete()
-    await message.answer(analysis_text, parse_mode="Markdown")
+    await message.answer(analysis_text, parse_mode="HTML")
 
-# --- PRICE (Цена) ---
+# --- PRICE ---
 @dp.message()
 async def get_price_handler(message: types.Message):
     ticker = message.text.upper().replace("/", "")
