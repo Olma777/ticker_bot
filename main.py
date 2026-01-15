@@ -28,14 +28,14 @@ async def setup_bot_commands():
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 <b>Терминал обновлен.</b>\n\n"
-        "📈 <b>Цена и Рейтинг:</b> отправь тикер (<code>ICP</code>)\n"
-        "🎯 <b>Снайпер-сетап:</b> <code>/sniper ICP</code>\n"
+        "👋 <b>Терминал готов.</b>\n\n"
+        "📈 <b>Цена:</b> отправь тикер (<code>ICP</code>)\n"
+        "🎯 <b>Снайпер:</b> <code>/sniper ICP</code>\n"
         "🧠 <b>Анализ:</b> <code>/deep ICP</code>",
         parse_mode="HTML"
     )
 
-# --- КОМАНДА SNIPER ---
+# --- SNIPER ---
 @dp.message(Command("sniper"))
 async def sniper_handler(message: types.Message):
     args = message.text.split()
@@ -47,7 +47,6 @@ async def sniper_handler(message: types.Message):
     loading_msg = await message.answer(f"🎯 Ищу точку входа для <b>{ticker}</b>...", parse_mode="HTML")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
-    # Получаем словарь с данными
     info, error = await get_crypto_price(ticker)
     
     if error:
@@ -55,14 +54,13 @@ async def sniper_handler(message: types.Message):
         await message.answer(f"❌ Не удалось найти цену для {ticker}.")
         return
 
-    # Берем только цену для анализа AI
     price = info['price'] 
     analysis_text = await get_sniper_analysis(ticker, price)
 
     await loading_msg.delete()
     await message.answer(analysis_text, parse_mode="Markdown")
 
-# --- КОМАНДА DEEP ---
+# --- DEEP ANALYSIS ---
 @dp.message(Command("deep"))
 async def deep_analysis_handler(message: types.Message):
     args = message.text.split()
@@ -79,7 +77,7 @@ async def deep_analysis_handler(message: types.Message):
     await loading_msg.delete()
     await message.answer(analysis_text, parse_mode="Markdown")
 
-# --- ПРОСТО ТИКЕР (КРАСИВЫЙ ВЫВОД) ---
+# --- ПРОСТО ТИКЕР (УЛУЧШЕННЫЙ ВЫВОД) ---
 @dp.message()
 async def get_price_handler(message: types.Message):
     ticker = message.text.upper().replace("/", "")
@@ -87,16 +85,21 @@ async def get_price_handler(message: types.Message):
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
-    # Получаем данные
     info, error = await get_crypto_price(ticker)
 
     if error:
         await message.answer("Тикер не найден. Попробуй /sniper.")
     else:
-        # ВОТ ЗДЕСЬ МАГИЯ ФОРМАТИРОВАНИЯ
-        # Мы берем данные из словаря info['...']
+        # 1. Формируем первую строку
+        header = f"🪙 <b>{info['name']}</b> ({info['ticker']})"
+        
+        # 2. Добавляем ранг, ТОЛЬКО если он известен (не "?")
+        if info['rank'] != "?":
+            header += f" #{info['rank']}"
+            
+        # 3. Собираем ответ
         response = (
-            f"🪙 <b>{info['name']}</b> ({info['ticker']}) #{info['rank']}\n"
+            f"{header}\n"
             f"💵 <b>Текущая цена:</b> ${info['price']}"
         )
         await message.answer(response, parse_mode="HTML")
