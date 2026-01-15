@@ -20,22 +20,22 @@ dp = Dispatcher()
 async def setup_bot_commands():
     commands = [
         BotCommand(command="/start", description="Перезапуск бота"),
-        BotCommand(command="/sniper", description="Поиск точки входа"),
-        BotCommand(command="/deep", description="Фундаментальный анализ"),
+        BotCommand(command="/sniper", description="Свинг-трейдинг (MM Analysis)"),
+        BotCommand(command="/deep", description="Фундаментальный Инвест-анализ"),
     ]
     await bot.set_my_commands(commands)
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 <b>Терминал готов.</b>\n\n"
-        "📈 <b>Цена:</b> отправь тикер (<code>ICP</code>)\n"
-        "🎯 <b>Снайпер:</b> <code>/sniper ICP</code>\n"
-        "🧠 <b>Анализ:</b> <code>/deep ICP</code>",
+        "👋 <b>Крипто-терминал V2.0</b>\n\n"
+        "📈 <b>Котировки:</b> отправь тикер (<code>SOL</code>)\n"
+        "🎯 <b>Свинг-сетап:</b> <code>/sniper SOL</code>\n"
+        "🧠 <b>Инвестиции:</b> <code>/deep SOL</code>",
         parse_mode="HTML"
     )
 
-# --- SNIPER ---
+# --- КОМАНДА SNIPER (Свинг / Маркетмейкер) ---
 @dp.message(Command("sniper"))
 async def sniper_handler(message: types.Message):
     args = message.text.split()
@@ -44,23 +44,24 @@ async def sniper_handler(message: types.Message):
         return
 
     ticker = args[1].upper()
-    loading_msg = await message.answer(f"🎯 Ищу точку входа для <b>{ticker}</b>...", parse_mode="HTML")
+    loading_msg = await message.answer(f"🎯 <b>{ticker}</b>: Анализирую действия маркетмейкера...", parse_mode="HTML")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
+    # 1. Получаем данные (Цену + Имя)
     info, error = await get_crypto_price(ticker)
     
     if error:
         await loading_msg.delete()
-        await message.answer(f"❌ Не удалось найти цену для {ticker}.")
+        await message.answer(f"❌ Не удалось найти данные для {ticker}.")
         return
 
-    price = info['price'] 
-    analysis_text = await get_sniper_analysis(ticker, price)
+    # 2. Передаем в анализ (Тикер, Имя, Цену)
+    analysis_text = await get_sniper_analysis(ticker, info['name'], info['price'])
 
     await loading_msg.delete()
     await message.answer(analysis_text, parse_mode="Markdown")
 
-# --- DEEP ANALYSIS ---
+# --- КОМАНДА DEEP (Фундаментал / Инвестиции) ---
 @dp.message(Command("deep"))
 async def deep_analysis_handler(message: types.Message):
     args = message.text.split()
@@ -69,15 +70,24 @@ async def deep_analysis_handler(message: types.Message):
         return
 
     ticker = args[1].upper()
-    loading_msg = await message.answer(f"🧠 Изучаю <b>{ticker}</b>...", parse_mode="HTML")
+    loading_msg = await message.answer(f"🧠 <b>{ticker}</b>: Читаю Whitepaper и токеномику...", parse_mode="HTML")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
-    analysis_text = await get_crypto_analysis(ticker)
+    # 1. Получаем имя монеты (цена тут менее важна, но нужна для проверки существования)
+    info, error = await get_crypto_price(ticker)
+    
+    if error:
+        await loading_msg.delete()
+        await message.answer(f"❌ Не удалось найти данные для {ticker}.")
+        return
+
+    # 2. Передаем в анализ (Тикер, Имя)
+    analysis_text = await get_crypto_analysis(ticker, info['name'])
 
     await loading_msg.delete()
     await message.answer(analysis_text, parse_mode="Markdown")
 
-# --- ПРОСТО ТИКЕР (УЛУЧШЕННЫЙ ВЫВОД) ---
+# --- ПРОСТО ТИКЕР (Цена) ---
 @dp.message()
 async def get_price_handler(message: types.Message):
     ticker = message.text.upper().replace("/", "")
@@ -90,14 +100,10 @@ async def get_price_handler(message: types.Message):
     if error:
         await message.answer("Тикер не найден. Попробуй /sniper.")
     else:
-        # 1. Формируем первую строку
         header = f"🪙 <b>{info['name']}</b> ({info['ticker']})"
-        
-        # 2. Добавляем ранг, ТОЛЬКО если он известен (не "?")
         if info['rank'] != "?":
             header += f" #{info['rank']}"
             
-        # 3. Собираем ответ
         response = (
             f"{header}\n"
             f"💵 <b>Текущая цена:</b> ${info['price']}"
