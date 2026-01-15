@@ -2,11 +2,10 @@ import asyncio
 import os
 import logging
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
-# ВАЖНО: Теперь мы импортируем из prices, а не data
 from prices import get_crypto_price
 from analysis import get_crypto_analysis, get_sniper_analysis
 
@@ -18,107 +17,155 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=token)
 dp = Dispatcher()
 
+# База данных языков в памяти
+user_languages = {}
+
 async def setup_bot_commands():
     commands = [
-        BotCommand(command="/start", description="Перезапуск бота"),
-        BotCommand(command="/sniper", description="Трейдинг (Маркетмейкер)"),
-        BotCommand(command="/audit", description="Аудит (Риски и Потенциал)"),
+        BotCommand(command="/start", description="Restart / Перезапуск"),
+        BotCommand(command="/sniper", description="Trading / Трейдинг"),
+        BotCommand(command="/audit", description="Audit / Аудит"),
     ]
     await bot.set_my_commands(commands)
 
+# --- 1. ВЫБОР ЯЗЫКА (БЕЗ ФЛАГОВ) ---
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    user_name = message.from_user.first_name
+    # Строгие кнопки без эмодзи
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Русский", callback_data="lang_ru"),
+            InlineKeyboardButton(text="English", callback_data="lang_en")
+        ]
+    ])
+    
     await message.answer(
-        f"👋 <b>Привет, {user_name}!</b>\n\n"
-        "Я твой <b>AI-терминал V2.0</b>.\n\n"
-        "👇 <b>Меню:</b>\n\n"
-        "1️⃣ <b>Котировки:</b>\n"
-        "Просто отправь тикер (<code>SOL</code>) — покажу цену и рейтинг.\n\n"
-        "2️⃣ <b>Свинг-Трейдинг:</b>\n"
-        "Команда <code>/sniper SOL</code>\n"
-        "<i>Ищет манипуляции, ликвидность и дает сетап на вход.</i>\n\n"
-        "3️⃣ <b>Аудит Проекта:</b>\n"
-        "Команда <code>/audit SOL</code>\n"
-        "<i>Проверка на скам, анализ команды и рисков.</i>",
+        "👋 <b>Welcome! / Добро пожаловать!</b>\n\n"
+        "Please choose your language:\n"
+        "Пожалуйста, выберите язык:",
+        reply_markup=keyboard,
         parse_mode="HTML"
     )
 
-# --- SNIPER ---
+# --- 2. ОБРАБОТКА ВЫБОРА ---
+@dp.callback_query(F.data.startswith("lang_"))
+async def language_selection(callback: CallbackQuery):
+    lang_code = callback.data.split("_")[1]
+    user_id = callback.from_user.id
+    
+    user_languages[user_id] = lang_code
+    
+    if lang_code == "ru":
+        text = (
+            "✅ <b>Язык установлен: Русский</b>\n\n"
+            "👇 <b>Меню:</b>\n"
+            "1️⃣ <b>Котировки:</b> Отправь тикер (<code>TON</code>)\n"
+            "2️⃣ <b>Трейдинг:</b> <code>/sniper TON</code>\n"
+            "3️⃣ <b>Аудит:</b> <code>/audit TON</code>"
+        )
+    else:
+        text = (
+            "✅ <b>Language set: English</b>\n\n"
+            "👇 <b>Menu:</b>\n"
+            "1️⃣ <b>Quotes:</b> Send ticker (<code>TON</code>)\n"
+            "2️⃣ <b>Trading:</b> <code>/sniper TON</code>\n"
+            "3️⃣ <b>Audit:</b> <code>/audit TON</code>"
+        )
+        
+    await callback.message.edit_text(text, parse_mode="HTML")
+    await callback.answer()
+
+# --- 3. SNIPER ---
 @dp.message(Command("sniper"))
 async def sniper_handler(message: types.Message):
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("⚠️ Пример: <code>/sniper BTC</code>", parse_mode="HTML")
+        await message.answer("⚠️ Example: <code>/sniper BTC</code>", parse_mode="HTML")
         return
 
     ticker = args[1].upper()
-    loading_msg = await message.answer(f"🎯 <b>{ticker}</b>: Анализирую рынок...", parse_mode="HTML")
+    user_id = message.from_user.id
+    lang = user_languages.get(user_id, "ru") 
+    
+    status_text = "🎯 Анализирую..." if lang == "ru" else "🎯 Analyzing..."
+    loading_msg = await message.answer(f"<b>{ticker}</b>: {status_text}", parse_mode="HTML")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     info, error = await get_crypto_price(ticker)
     
     if error:
         await loading_msg.delete()
-        await message.answer(f"❌ Тикер {ticker} не найден.")
+        err_text = "❌ Тикер не найден." if lang == "ru" else "❌ Ticker not found."
+        await message.answer(err_text)
         return
 
-    # Передаем: Тикер, Имя, Цену
-    analysis_text = await get_sniper_analysis(ticker, info['name'], info['price'])
+    analysis_text = await get_sniper_analysis(ticker, info['name'], info['price'], lang=lang)
 
     await loading_msg.delete()
     await message.answer(analysis_text, parse_mode="HTML")
 
-# --- AUDIT ---
+# --- 4. AUDIT ---
 @dp.message(Command("audit"))
 async def audit_handler(message: types.Message):
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("⚠️ Пример: <code>/audit BTC</code>", parse_mode="HTML")
+        await message.answer("⚠️ Example: <code>/audit BTC</code>", parse_mode="HTML")
         return
 
     ticker = args[1].upper()
-    loading_msg = await message.answer(f"🛡 <b>{ticker}</b>: Проверяю безопасность...", parse_mode="HTML")
+    user_id = message.from_user.id
+    lang = user_languages.get(user_id, "ru")
+
+    status_text = "🛡 Проверяю..." if lang == "ru" else "🛡 Auditing..."
+    loading_msg = await message.answer(f"<b>{ticker}</b>: {status_text}", parse_mode="HTML")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     info, error = await get_crypto_price(ticker)
-    
     if error:
         await loading_msg.delete()
-        await message.answer(f"❌ Тикер {ticker} не найден.")
+        err_text = "❌ Тикер не найден." if lang == "ru" else "❌ Ticker not found."
+        await message.answer(err_text)
         return
 
-    # Передаем: Тикер, Имя
-    analysis_text = await get_crypto_analysis(ticker, info['name'])
+    analysis_text = await get_crypto_analysis(ticker, info['name'], lang=lang)
 
     await loading_msg.delete()
     await message.answer(analysis_text, parse_mode="HTML")
 
-# --- PRICE ---
+# --- 5. PRICE ---
 @dp.message()
 async def get_price_handler(message: types.Message):
     ticker = message.text.upper().replace("/", "")
     if len(ticker) > 6: return
 
+    user_id = message.from_user.id
+    lang = user_languages.get(user_id, "ru")
+
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     info, error = await get_crypto_price(ticker)
 
     if error:
-        await message.answer("Тикер не найден. Попробуй /sniper или /audit.")
+        help_text = "Тикер не найден." if lang == "ru" else "Ticker not found."
+        await message.answer(help_text)
     else:
+        if lang == "ru":
+            price_label = "Текущая цена"
+        else:
+            price_label = "Current Price"
+
         header = f"🪙 <b>{info['name']}</b> ({info['ticker']})"
         if info['rank'] != "?":
             header += f" #{info['rank']}"
             
         response = (
             f"{header}\n"
-            f"💵 <b>Текущая цена:</b> ${info['price']}"
+            f"💵 <b>{price_label}:</b> ${info['price']}"
         )
         await message.answer(response, parse_mode="HTML")
 
 async def main():
-    print("Бот запускается...")
+    print("Bot is starting...")
     await setup_bot_commands()
     await dp.start_polling(bot)
 
@@ -126,4 +173,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Бот выключен.")
+        print("Bot stopped.")

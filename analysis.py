@@ -4,7 +4,6 @@ from openai import AsyncOpenAI
 
 load_dotenv()
 
-# Настройка клиента OpenRouter (DeepSeek V3 / Qwen / GPT-4)
 client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
     base_url="https://openrouter.ai/api/v1"
@@ -12,98 +11,103 @@ client = AsyncOpenAI(
 
 MODEL_NAME = "deepseek/deepseek-chat"
 
-# --- 1. АУДИТ ПРОЕКТА (/audit) ---
-async def get_crypto_analysis(ticker, full_name):
-    system_prompt = f"""
-    Ты профессиональный независимый аудитор крипто-проектов.
-    Твоя задача — провести жесткий фундаментальный аудит проекта {full_name} ({ticker}).
-    Ты должен выявить не только потенциал роста, но и скрытые риски, признаки скама или слабую токеномику.
+# --- АУДИТ (AUDIT) ---
+async def get_crypto_analysis(ticker, full_name, lang="ru"):
+    # Выбираем промпт в зависимости от языка
+    if lang == "ru":
+        system_prompt = f"""
+        Ты профессиональный крипто-аудитор. Проведи аудит проекта {full_name} ({ticker}).
+        ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ.
 
-    ИСПОЛЬЗУЙ ЭТОТ ШАБЛОН АУДИТА:
+        ИСПОЛЬЗУЙ HTML ТЕГИ (<b>bold</b>, <i>italic</i>).
 
-    1. 🛡 Безопасность и Репутация (Scam Check):
-       - Кто стоит за проектом? (Анонимы или публичная команда с репутацией).
-       - Были ли взломы или аудиты кода (Certik и др.)?
-       - Есть ли "Red Flags" (тревожные звоночки)?
+        ШАБЛОН ОТВЕТА:
+        🛡 <b>АУДИТ БЕЗОПАСНОСТИ: {ticker}</b>
 
-    2. 💎 Фундаментальная ценность:
-       - Реальная польза (Utility): Какую проблему решает проект?
-       - Конкурентоспособность: Чем он лучше аналогов?
-       - Экосистема: Растет ли TVL и активность разработчиков?
+        1. <b>Безопасность и Команда:</b> ...
+        2. <b>Фундаментал и Польза:</b> ...
+        3. <b>Токеномика:</b> ...
+        4. <b>ВЕРДИКТ:</b> ...
+        """
+    else:
+        system_prompt = f"""
+        You are a professional crypto auditor. Conduct an audit for {full_name} ({ticker}).
+        ANSWER STRICTLY IN ENGLISH.
 
-    3. 📊 Токеномика и Инфляция:
-       - Распределение токенов: Нет ли чрезмерной концентрации у команды?
-       - Вестинги: Ожидаются ли крупные разблокировки, которые обрушат цену?
-       - Инфляционная модель.
+        USE HTML TAGS (<b>bold</b>, <i>italic</i>).
 
-    4. 🌍 Макро и Рынок:
-       - Ликвидность и доступность на биржах.
-       - Корреляция с рынком и текущий хайп.
+        RESPONSE TEMPLATE:
+        🛡 <b>SECURITY AUDIT: {ticker}</b>
 
-    5. ⚖️ ВЕРДИКТ АУДИТОРА:
-       - Категория риска: [Низкий / Средний / Высокий / ЭКСТРЕМАЛЬНЫЙ].
-       - Долгосрочный потенциал: (Инвестиционный вывод).
-
-    6. Формат вывода: Markdown для Telegram.
-    """
-
-    try:
-        response = await client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "Ты строгий крипто-аудитор."},
-                {"role": "user", "content": system_prompt}
-            ],
-            extra_headers={
-                "HTTP-Referer": "https://telegram.org",
-                "X-Title": "CryptoAuditBot"
-            }
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"⚠️ Ошибка аудита: {str(e)}"
-
-
-# --- 2. СВИНГ-ТРЕЙДИНГ (/sniper) ---
-async def get_sniper_analysis(ticker, full_name, price):
-    system_prompt = f"""
-    Проведи технический анализ и анализ маркетмейкера для монеты {full_name} ({ticker}) при цене ${price}.
-    Ты — профессиональный трейдер (Smart Money Concepts).
-
-    ШАБЛОН АНАЛИЗА:
-
-    1. Ключевые уровни (D/W):
-       - Поддержка и Сопротивление.
-
-    2. Структура рынка:
-       - Тренд и Фаза (Накопление/Распределение).
-
-    3. Следы Маркетмейкера:
-       - Ликвидность (где стопы?).
-       - Дисбаланс (OI, Funding Rates).
-       - Манипуляции.
-
-    4. СИГНАЛ (Свинг):
-       - Направление: [ЛОНГ / ШОРТ] (Строго одно).
-       - Точка входа.
-       - Тейки (3 уровня).
-       - Стоп-лосс.
-
-    5. Формат: Markdown для Telegram.
-    """
+        1. <b>Security & Team:</b> ...
+        2. <b>Fundamentals & Utility:</b> ...
+        3. <b>Tokenomics:</b> ...
+        4. <b>VERDICT:</b> ...
+        """
 
     try:
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "Ты профессиональный трейдер."},
+                {"role": "system", "content": "You are a crypto expert. Use HTML formatting."},
                 {"role": "user", "content": system_prompt}
             ],
-            extra_headers={
-                "HTTP-Referer": "https://telegram.org",
-                "X-Title": "CryptoSniperBot"
-            }
+            extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
         )
         return response.choices[0].message.content
     except Exception as e:
-        return f"⚠️ Ошибка снайпера: {str(e)}"
+        return f"⚠️ Error: {str(e)}"
+
+# --- СНАЙПЕР (SNIPER) ---
+async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
+    if lang == "ru":
+        system_prompt = f"""
+        Ты профессиональный трейдер (Smart Money). Проведи анализ {full_name} ({ticker}) при цене ${price}.
+        ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ.
+        
+        ИСПОЛЬЗУЙ HTML ТЕГИ.
+
+        ШАБЛОН:
+        🎯 <b>СНАЙПЕР-СЕТАП: {ticker}</b>
+        💵 <b>Цена:</b> ${price}
+
+        📊 <b>Технический анализ:</b> ...
+        🐋 <b>Следы Маркетмейкера:</b> ...
+
+        🚦 <b>СИГНАЛ:</b> [ЛОНГ / ШОРТ]
+        📍 <b>Вход:</b> ...
+        ✅ <b>Тейки:</b> ...
+        ⛔️ <b>Стоп:</b> ...
+        """
+    else:
+        system_prompt = f"""
+        You are a professional trader (Smart Money). Analyze {full_name} ({ticker}) at price ${price}.
+        ANSWER STRICTLY IN ENGLISH.
+        
+        USE HTML TAGS.
+
+        TEMPLATE:
+        🎯 <b>SNIPER SETUP: {ticker}</b>
+        💵 <b>Price:</b> ${price}
+
+        📊 <b>Technical Analysis:</b> ...
+        🐋 <b>Smart Money Clues:</b> ...
+
+        🚦 <b>SIGNAL:</b> [LONG / SHORT]
+        📍 <b>Entry:</b> ...
+        ✅ <b>Take Profit:</b> ...
+        ⛔️ <b>Stop Loss:</b> ...
+        """
+
+    try:
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "You are a pro trader. Use HTML formatting."},
+                {"role": "user", "content": system_prompt}
+            ],
+            extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}"
