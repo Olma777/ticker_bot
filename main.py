@@ -6,10 +6,9 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand
 
-# Импортируем наши функции
+# Импортируем только то, что работает
 from data import get_crypto_price
 from analysis import get_crypto_analysis
-from news import get_crypto_news  # <--- НОВОЕ
 
 load_dotenv()
 token = os.getenv("BOT_TOKEN")
@@ -24,7 +23,6 @@ async def setup_bot_commands():
         BotCommand(command="/start", description="Перезапуск бота"),
         BotCommand(command="/t", description="Быстрая цена (например: /t SOL)"),
         BotCommand(command="/deep", description="Глубокий AI-анализ"),
-        BotCommand(command="/news", description="Последние новости"), # <--- НОВОЕ
     ]
     await bot.set_my_commands(commands)
 
@@ -33,29 +31,11 @@ async def cmd_start(message: types.Message):
     await message.answer(
         "👋 Привет! Я твой крипто-терминал.\n\n"
         "📈 <b>Цена:</b> просто тикер (<code>SOL</code>)\n"
-        "🧠 <b>Анализ:</b> <code>/deep SOL</code>\n"
-        "📰 <b>Новости:</b> <code>/news SOL</code>",
+        "🧠 <b>Анализ:</b> <code>/deep SOL</code>",
         parse_mode="HTML"
     )
 
-# Команда /news
-@dp.message(Command("news"))
-async def news_handler(message: types.Message):
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("⚠️ Укажи тикер. Пример: <code>/news BTC</code>", parse_mode="HTML")
-        return
-
-    ticker = args[1].upper()
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    
-    # Получаем новости
-    news_text = await get_crypto_news(ticker)
-    
-    # Отправляем (disable_web_page_preview=True, чтобы не было кучи картинок)
-    await message.answer(news_text, parse_mode="HTML", disable_web_page_preview=True)
-
-# Команда /deep
+# Команда /deep (Анализ)
 @dp.message(Command("deep"))
 async def deep_analysis_handler(message: types.Message):
     args = message.text.split()
@@ -77,7 +57,7 @@ async def deep_analysis_handler(message: types.Message):
 async def get_price_handler(message: types.Message):
     ticker = message.text.upper().replace("/", "")
     
-    # Игнорируем длинные сообщения (не похожие на тикеры)
+    # Игнорируем слишком длинные сообщения
     if len(ticker) > 6:
         return
 
@@ -85,7 +65,7 @@ async def get_price_handler(message: types.Message):
     price, error = await get_crypto_price(ticker)
 
     if error:
-        await message.answer("Не нашел такой тикер. Попробуй /news или /deep.")
+        await message.answer("Не нашел такой тикер. Попробуй /deep для анализа.")
     else:
         await message.answer(
             f"💰 <b>{ticker}</b>: ${price}", 
