@@ -1,38 +1,54 @@
 import aiohttp
 
-# Простой словарь для перевода Тикера в ID (для теста)
-COIN_MAPPING = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-    "SOL": "solana",
-    "TON": "the-open-network",
-    "DOGE": "dogecoin"
-}
-
 async def get_crypto_price(ticker):
     """
-    Получает цену монеты с CoinGecko.
+    Ищет цену на Binance, затем на Coinbase, затем на CryptoCompare.
+    Возвращает (цена, ошибка).
     """
-    # 1. Приводим тикер к верхнему регистру (sol -> SOL)
-    ticker = ticker.upper()
+    ticker = ticker.upper().replace("USDT", "").replace("USD", "")
     
-    # 2. Ищем ID монеты (если нет в списке — возвращаем None)
-    coin_id = COIN_MAPPING.get(ticker)
-    if not coin_id:
-        return None, "Пока я знаю только BTC, ETH, SOL, TON, DOGE. Скоро выучу все!"
+    # Притворяемся браузером (обязательно!)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
 
-    # 3. Делаем запрос к API CoinGecko
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd"
-    
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers=headers) as session:
+        
+        # --- ПОПЫТКА 1: BINANCE (Самый быстрый) ---
         try:
-            async with session.get(url) as response:
+            # Binance хочет формат BTCUSDT
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={ticker}USDT"
+            async with session.get(url, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
-                    # Ответ приходит в виде {"bitcoin": {"usd": 42000}}
-                    price = data.get(coin_id, {}).get("usd")
-                    return price, None
-                else:
-                    return None, "Ошибка подключения к бирже."
-        except Exception as e:
-            return None, f"Ошибка: {str(e)}"
+                    price = float(data["price"])
+                    # :g убирает лишние нули (150.5000 -> 150.5)
+                    return f"{price:g}", None
+        except Exception:
+            pass # Если ошибка, молча идем к следующему источнику
+
+        # --- ПОПЫТКА 2: COINBASE (Если на Бинансе нет) ---
+        try:
+            # Coinbase хочет формат BTC-USD
+            url = f"https://api.coinbase.com/v2/prices/{ticker}-USD/spot"
+            async with session.get(url, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    price = data["data"]["amount"]
+                    return str(price), None
+        except Exception:
+            pass
+
+        # --- ПОПЫТКА 3: CRYPTOCOMPARE (Для редких монет) ---
+        try:
+            url = f"https://min-api.cryptocompare.com/data/price?fsym={ticker}&tsyms=USD"
+            async with session.get(url, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if "USD" in data:
+                        return str(data["USD"]), None
+        except Exception:
+            pass
+
+    # Если нигде не нашли
+    return None, True
