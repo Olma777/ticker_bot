@@ -11,15 +11,30 @@ client = AsyncOpenAI(
 
 MODEL_NAME = "deepseek/deepseek-chat"
 
+def clean_html(text):
+    """
+    Чистит текст от тегов, которые не понимает Telegram HTML.
+    """
+    if not text: return ""
+    # Заменяем веб-переносы на обычные
+    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    # Убираем заголовки h1-h6 (Телеграм их не знает), меняем на жирный
+    text = text.replace("<h1>", "<b>").replace("</h1>", "</b>")
+    text = text.replace("<h2>", "<b>").replace("</h2>", "</b>")
+    text = text.replace("<h3>", "<b>").replace("</h3>", "</b>")
+    # Убираем лишние Markdown-символы, если они проскочили
+    text = text.replace("**", "") 
+    return text
+
 # --- АУДИТ (AUDIT) ---
 async def get_crypto_analysis(ticker, full_name, lang="ru"):
-    # Выбираем промпт в зависимости от языка
     if lang == "ru":
         system_prompt = f"""
         Ты профессиональный крипто-аудитор. Проведи аудит проекта {full_name} ({ticker}).
         ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ.
-
+        
         ИСПОЛЬЗУЙ HTML ТЕГИ (<b>bold</b>, <i>italic</i>).
+        НЕ ИСПОЛЬЗУЙ тег <br>, используй перенос строки.
 
         ШАБЛОН ОТВЕТА:
         🛡 <b>АУДИТ БЕЗОПАСНОСТИ: {ticker}</b>
@@ -35,6 +50,7 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
         ANSWER STRICTLY IN ENGLISH.
 
         USE HTML TAGS (<b>bold</b>, <i>italic</i>).
+        DO NOT USE <br> tags, use newlines.
 
         RESPONSE TEMPLATE:
         🛡 <b>SECURITY AUDIT: {ticker}</b>
@@ -49,12 +65,13 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "You are a crypto expert. Use HTML formatting."},
+                {"role": "system", "content": "You are a crypto expert. Use HTML formatting. No markdown."},
                 {"role": "user", "content": system_prompt}
             ],
             extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
         )
-        return response.choices[0].message.content
+        # Чистим ответ перед отправкой
+        return clean_html(response.choices[0].message.content)
     except Exception as e:
         return f"⚠️ Error: {str(e)}"
 
@@ -65,7 +82,8 @@ async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
         Ты профессиональный трейдер (Smart Money). Проведи анализ {full_name} ({ticker}) при цене ${price}.
         ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ.
         
-        ИСПОЛЬЗУЙ HTML ТЕГИ.
+        ИСПОЛЬЗУЙ HTML ТЕГИ (<b>bold</b>, <i>italic</i>).
+        НЕ ИСПОЛЬЗУЙ тег <br>, используй перенос строки.
 
         ШАБЛОН:
         🎯 <b>СНАЙПЕР-СЕТАП: {ticker}</b>
@@ -84,7 +102,8 @@ async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
         You are a professional trader (Smart Money). Analyze {full_name} ({ticker}) at price ${price}.
         ANSWER STRICTLY IN ENGLISH.
         
-        USE HTML TAGS.
+        USE HTML TAGS (<b>bold</b>, <i>italic</i>).
+        DO NOT USE <br> tags, use newlines.
 
         TEMPLATE:
         🎯 <b>SNIPER SETUP: {ticker}</b>
@@ -103,11 +122,12 @@ async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "You are a pro trader. Use HTML formatting."},
+                {"role": "system", "content": "You are a pro trader. Use HTML formatting. No markdown."},
                 {"role": "user", "content": system_prompt}
             ],
             extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
         )
-        return response.choices[0].message.content
+        # Чистим ответ перед отправкой
+        return clean_html(response.choices[0].message.content)
     except Exception as e:
         return f"⚠️ Error: {str(e)}"
