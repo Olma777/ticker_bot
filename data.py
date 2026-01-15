@@ -1,98 +1,128 @@
-import aiohttp
+import asyncio
+import os
+import logging
+from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command, CommandStart
+from aiogram.types import BotCommand
 
-# РАСШИРЕННАЯ ШПАРГАЛКА (TOP 150+)
-# Используется только если CoinCap не смог определить имя
-COIN_NAMES = {
-    # TOP 10
-    "BTC": "Bitcoin", "ETH": "Ethereum", "USDT": "Tether", "BNB": "BNB",
-    "SOL": "Solana", "XRP": "XRP", "USDC": "USDC", "ADA": "Cardano",
-    "AVAX": "Avalanche", "DOGE": "Dogecoin",
+from data import get_crypto_price
+from analysis import get_crypto_analysis, get_sniper_analysis
+
+load_dotenv()
+token = os.getenv("BOT_TOKEN")
+
+logging.basicConfig(level=logging.INFO)
+
+bot = Bot(token=token)
+dp = Dispatcher()
+
+async def setup_bot_commands():
+    commands = [
+        BotCommand(command="/start", description="Перезапуск бота"),
+        BotCommand(command="/sniper", description="Трейдинг (Маркетмейкер)"),
+        BotCommand(command="/audit", description="Аудит (Риски и Потенциал)"),
+    ]
+    await bot.set_my_commands(commands)
+
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    user_name = message.from_user.first_name
+    await message.answer(
+        f"👋 <b>Привет, {user_name}!</b>\n\n"
+        "Я твой <b>AI-терминал V2.0</b>.\n\n"
+        "👇 <b>Меню:</b>\n\n"
+        "1️⃣ <b>Котировки:</b>\n"
+        "Просто отправь тикер (<code>SOL</code>) — покажу цену и рейтинг.\n\n"
+        "2️⃣ <b>Свинг-Трейдинг:</b>\n"
+        "Команда <code>/sniper SOL</code>\n"
+        "<i>Ищет манипуляции, ликвидность и дает сетап на вход.</i>\n\n"
+        "3️⃣ <b>Аудит Проекта:</b>\n"
+        "Команда <code>/audit SOL</code>\n"
+        "<i>Проверка на скам, анализ команды и рисков.</i>",
+        parse_mode="HTML"
+    )
+
+# --- SNIPER ---
+@dp.message(Command("sniper"))
+async def sniper_handler(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("⚠️ Пример: <code>/sniper BTC</code>", parse_mode="HTML")
+        return
+
+    ticker = args[1].upper()
+    loading_msg = await message.answer(f"🎯 <b>{ticker}</b>: Анализирую рынок...", parse_mode="HTML")
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
-    # POPULAR L1/L2
-    "TRX": "TRON", "DOT": "Polkadot", "LINK": "Chainlink", "MATIC": "Polygon",
-    "TON": "Toncoin", "LTC": "Litecoin", "BCH": "Bitcoin Cash", "ATOM": "Cosmos",
-    "NEAR": "NEAR Protocol", "APT": "Aptos", "ARB": "Arbitrum", "OP": "Optimism",
-    "SUI": "Sui", "SEI": "Sei", "HBAR": "Hedera", "EGLD": "MultiversX",
-    "ICP": "Internet Computer", "KAS": "Kaspa", "FTM": "Fantom", "INJ": "Injective",
-    "ALGO": "Algorand", "XLM": "Stellar", "XMR": "Monero", "ETC": "Ethereum Classic",
-    "VET": "VeChain", "EOS": "EOS", "FLOW": "Flow", "XTZ": "Tezos",
-
-    # DEFI & INFRA
-    "UNI": "Uniswap", "LDO": "Lido DAO", "MKR": "Maker", "AAVE": "Aave",
-    "RUNE": "THORChain", "SNX": "Synthetix", "GRT": "The Graph", "RNDR": "Render",
-    "FIL": "Filecoin", "AR": "Arweave", "THETA": "Theta Network", "JUP": "Jupiter",
-    "TIA": "Celestia", "PYTH": "Pyth Network", "IMX": "Immutable",
-
-    # MEME COINS
-    "SHIB": "Shiba Inu", "PEPE": "Pepe", "WIF": "dogwifhat", "FLOKI": "Floki",
-    "BONK": "Bonk", "BOME": "Book of Meme", "MEME": "Memecoin", "DOGS": "DOGS",
-    "NOT": "Notcoin", "BRETT": "Brett", "POPCAT": "Popcat",
-
-    # AI & GAMING
-    "FET": "Fetch.ai", "TAO": "Bittensor", "WLD": "Worldcoin", "AXS": "Axie Infinity",
-    "SAND": "The Sandbox", "MANA": "Decentraland", "GALA": "Gala", "APE": "ApeCoin",
-    "BEAM": "Beam", "QNT": "Quant"
-}
-
-async def get_crypto_price(ticker):
-    """
-    Возвращает словарь с данными.
-    Логика:
-    1. Ищем в CoinCap (там есть полные имена и ранг).
-    2. Если нет -> Ищем в Binance и берем имя из шпаргалки COIN_NAMES.
-    3. Если нет в шпаргалке -> Имя будет равно Тикеру.
-    """
-    ticker_upper = ticker.upper().replace("USDT", "").replace("USD", "")
+    info, error = await get_crypto_price(ticker)
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    if error:
+        await loading_msg.delete()
+        await message.answer(f"❌ Тикер {ticker} не найден.")
+        return
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        
-        # --- PLAN A: COINCAP (Лучший вариант) ---
-        try:
-            url = f"https://api.coincap.io/v2/assets?search={ticker_upper}"
-            async with session.get(url, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    for coin in data['data']:
-                        # Точное совпадение тикера
-                        if coin['symbol'] == ticker_upper:
-                            price = float(coin['priceUsd'])
-                            
-                            if price < 1: fmt_price = f"{price:.6f}"
-                            else: fmt_price = f"{price:.2f}"
+    # Передаем: Тикер, Имя, Цену
+    analysis_text = await get_sniper_analysis(ticker, info['name'], info['price'])
 
-                            return {
-                                "price": fmt_price,
-                                "name": coin['name'],       # Берем имя отсюда (например "Solana")
-                                "rank": coin['rank'],       # Берем ранг отсюда
-                                "ticker": coin['symbol']
-                            }, None
-        except Exception:
-            pass # Если CoinCap упал, идем к Plan B
+    await loading_msg.delete()
+    await message.answer(analysis_text, parse_mode="HTML")
 
-        # --- PLAN B: BINANCE (Запасной) ---
-        try:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={ticker_upper}USDT"
-            async with session.get(url, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    price = float(data["price"])
-                    fmt_price = f"{price:g}"
-                    
-                    # Ищем имя в нашей огромной шпаргалке
-                    # Если там нет ключа ticker_upper, вернется сам ticker_upper
-                    full_name = COIN_NAMES.get(ticker_upper, ticker_upper)
-                    
-                    return {
-                        "price": fmt_price,
-                        "name": full_name,  # Берем из шпаргалки
-                        "rank": "?",
-                        "ticker": ticker_upper
-                    }, None
-        except Exception:
-            pass
+# --- AUDIT ---
+@dp.message(Command("audit"))
+async def audit_handler(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("⚠️ Пример: <code>/audit BTC</code>", parse_mode="HTML")
+        return
 
-    return None, True
+    ticker = args[1].upper()
+    loading_msg = await message.answer(f"🛡 <b>{ticker}</b>: Проверяю безопасность...", parse_mode="HTML")
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    info, error = await get_crypto_price(ticker)
+    
+    if error:
+        await loading_msg.delete()
+        await message.answer(f"❌ Тикер {ticker} не найден.")
+        return
+
+    # Передаем: Тикер, Имя
+    analysis_text = await get_crypto_analysis(ticker, info['name'])
+
+    await loading_msg.delete()
+    await message.answer(analysis_text, parse_mode="HTML")
+
+# --- PRICE ---
+@dp.message()
+async def get_price_handler(message: types.Message):
+    ticker = message.text.upper().replace("/", "")
+    if len(ticker) > 6: return
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    info, error = await get_crypto_price(ticker)
+
+    if error:
+        await message.answer("Тикер не найден. Попробуй /sniper или /audit.")
+    else:
+        header = f"🪙 <b>{info['name']}</b> ({info['ticker']})"
+        if info['rank'] != "?":
+            header += f" #{info['rank']}"
+            
+        response = (
+            f"{header}\n"
+            f"💵 <b>Текущая цена:</b> ${info['price']}"
+        )
+        await message.answer(response, parse_mode="HTML")
+
+async def main():
+    print("Бот запускается...")
+    await setup_bot_commands()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Бот выключен.")
