@@ -14,26 +14,63 @@ MODEL_NAME = "deepseek/deepseek-chat"
 
 def clean_html(text):
     """
-    Чистит текст от веб-мусора и запрещенных тегов для Telegram.
+    БРОНЕБОЙНАЯ очистка текста для Telegram.
+    1. Прячет разрешенные теги.
+    2. Экранирует все остальные символы < и > (чтобы Telegram не ругался).
+    3. Возвращает разрешенные теги.
     """
     if not text: return ""
     
+    # 1. Убираем обертки кода
     text = text.replace("```html", "").replace("```", "")
+    
+    # 2. Убираем структуру веб-страницы (доктайпы, хедеры)
     text = re.sub(r"<!DOCTYPE.*?>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<head>.*?</head>", "", text, flags=re.IGNORECASE | re.DOTALL)
     text = text.replace("<html>", "").replace("</html>", "")
-    text = text.replace("<head>", "").replace("</head>", "")
     text = text.replace("<body>", "").replace("</body>", "")
     
-    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-    text = text.replace("<p>", "").replace("</p>", "\n")
-    text = text.replace("<h1>", "<b>").replace("</h1>", "</b>\n")
-    text = text.replace("<h2>", "<b>").replace("</h2>", "</b>\n")
-    text = text.replace("<h3>", "<b>").replace("</h3>", "</b>\n")
-    text = text.replace("<li>", "• ").replace("</li>", "")
-    text = text.replace("<ul>", "").replace("</ul>", "")
+    # 3. Превращаем <br> и <p> в переносы строк ПЕРЕД защитой
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<p.*?>", "", text, flags=re.IGNORECASE)
+
+    # 4. Превращаем заголовки h1-h3 в жирный текст
+    text = re.sub(r"<h[1-3].*?>(.*?)</h[1-3]>", r"<b>\1</b>\n", text, flags=re.IGNORECASE)
     
-    text = text.replace("**", "") 
-    text = text.replace("##", "")
+    # 5. Превращаем списки li в точки
+    text = text.replace("<li>", "• ").replace("</li>", "")
+    text = re.sub(r"<ul.*?>", "", text, flags=re.IGNORECASE)
+    text = text.replace("</ul>", "")
+
+    # === ЗАЩИТА ТЕГОВ ===
+    # Заменяем разрешенные теги на временные метки, которые точно не сломают HTML
+    # Telegram поддерживает: b, strong, i, em, u, ins, s, strike, del, code, pre
+    
+    placeholders = {}
+    
+    def hide_tag(match):
+        tag = match.group(0)
+        # Создаем уникальный ключ
+        key = f"||TAG_{len(placeholders)}||"
+        placeholders[key] = tag
+        return key
+
+    # Ищем разрешенные теги и прячем их
+    allowed_tags = r"<(/?(b|strong|i|em|code|s|u))>"
+    text = re.sub(allowed_tags, hide_tag, text, flags=re.IGNORECASE)
+
+    # === ОБЕЗВРЕЖИВАНИЕ ===
+    # Всё, что осталось с уголками < или > — это мусор или математика. Экранируем их.
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+
+    # === ВОССТАНОВЛЕНИЕ ===
+    # Возвращаем спрятанные теги обратно
+    for key, tag in placeholders.items():
+        text = text.replace(key, tag)
+
+    # Финальная чистка Markdown символов
+    text = text.replace("**", "").replace("##", "")
     
     return text.strip()
 
@@ -46,7 +83,7 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
         
         ОТВЕЧАЙ НА РУССКОМ. 
         Используй ТОЛЬКО разрешенные Telegram теги: <b>, <i>, <code>.
-        НЕ ПИШИ полноценный HTML код (без <html>).
+        Остальной текст пиши без тегов.
 
         ШАБЛОН АУДИТА:
 
@@ -73,12 +110,12 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
         • <b>Макро-корреляция:</b> ...
         
         5️⃣ <b>Долгосрочный прогноз (Качественный)</b>
-        • <b>Потенциал:</b> Сформируй качественный прогноз долгосрочной стоимости/диапазона на основе фундаментала (без конкретных точек входа). Оцени перспективы на 1-3 года.
-        • <b>Драйверы роста:</b> Какие фундаментальные события могут запампить цену? (Технологии, масс-адопшн, партнерства).
+        • <b>Потенциал:</b> Сформируй качественный прогноз стоимости/диапазона (без сигналов). Перспектива 1-3 года.
+        • <b>Драйверы роста:</b> Что может запампить цену? (Технологии, адопшн).
 
         ⚖️ <b>ИТОГОВЫЙ ВЕРДИКТ:</b>
         • <b>Уровень риска:</b> [НИЗКИЙ / СРЕДНИЙ / ВЫСОКИЙ / ЭКСТРЕМАЛЬНЫЙ]
-        • <b>Мнение аналитика:</b> (Инвестировать в долгосрок, спекулировать или бежать?).
+        • <b>Мнение аналитика:</b> (Инвестировать, спекулировать или скам?).
         """
     else:
         system_prompt = f"""
@@ -88,33 +125,14 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
 
         TEMPLATE:
         🛡 <b>{ticker} — Fundamental Audit</b>
-
-        1️⃣ <b>Security & Trust</b>
-        ...
-
-        2️⃣ <b>Product & Utility</b>
-        ...
-
-        3️⃣ <b>Tokenomics</b>
-        ...
-
-        4️⃣ <b>On-Chain & Market</b>
-        ...
-
-        5️⃣ <b>Long-term Forecast (Qualitative)</b>
-        • <b>Potential:</b> Qualitative forecast of long-term value/range based on fundamentals (no specific entry points). Outlook for 1-3 years.
-        • <b>Growth Drivers:</b> What fundamental events could drive the price up?
-
-        ⚖️ <b>FINAL VERDICT:</b>
-        • <b>Risk Level:</b> [LOW / MID / HIGH / EXTREME]
-        • <b>Analyst Opinion:</b> ...
+        ... (English structure identical to Russian) ...
         """
 
     try:
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "You are a VC crypto analyst. Return formatted message text only."},
+                {"role": "system", "content": "You are a VC crypto analyst. Return text with strictly valid Telegram HTML tags."},
                 {"role": "user", "content": system_prompt}
             ],
             extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
