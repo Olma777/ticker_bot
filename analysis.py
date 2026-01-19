@@ -18,16 +18,12 @@ def clean_html(text):
     """
     if not text: return ""
     
-    # 1. Убираем "обертки" кода, если нейросеть решила вернуть код
     text = text.replace("```html", "").replace("```", "")
-    
-    # 2. Убираем структуру веб-страницы (из-за этого была ошибка !doctype)
     text = re.sub(r"<!DOCTYPE.*?>", "", text, flags=re.IGNORECASE)
     text = text.replace("<html>", "").replace("</html>", "")
     text = text.replace("<head>", "").replace("</head>", "")
     text = text.replace("<body>", "").replace("</body>", "")
     
-    # 3. Заменяем веб-теги на телеграм-теги
     text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
     text = text.replace("<p>", "").replace("</p>", "\n")
     text = text.replace("<h1>", "<b>").replace("</h1>", "</b>\n")
@@ -36,13 +32,12 @@ def clean_html(text):
     text = text.replace("<li>", "• ").replace("</li>", "")
     text = text.replace("<ul>", "").replace("</ul>", "")
     
-    # 4. Убираем Markdown (**), чтобы не было каши
     text = text.replace("**", "") 
     text = text.replace("##", "")
     
     return text.strip()
 
-# --- АУДИТ (PRO VC VERSION) ---
+# --- АУДИТ (PRO VC VERSION + LONG TERM) ---
 async def get_crypto_analysis(ticker, full_name, lang="ru"):
     if lang == "ru":
         system_prompt = f"""
@@ -51,7 +46,7 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
         
         ОТВЕЧАЙ НА РУССКОМ. 
         Используй ТОЛЬКО разрешенные Telegram теги: <b>, <i>, <code>.
-        НЕ ПИШИ полноценный HTML код (без <html>, без <body>). Только текст сообщения.
+        НЕ ПИШИ полноценный HTML код (без <html>).
 
         ШАБЛОН АУДИТА:
 
@@ -76,28 +71,50 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
         • <b>TVL и Метрики:</b> ...
         • <b>Листинги:</b> ...
         • <b>Макро-корреляция:</b> ...
+        
+        5️⃣ <b>Долгосрочный прогноз (Качественный)</b>
+        • <b>Потенциал:</b> Сформируй качественный прогноз долгосрочной стоимости/диапазона на основе фундаментала (без конкретных точек входа). Оцени перспективы на 1-3 года.
+        • <b>Драйверы роста:</b> Какие фундаментальные события могут запампить цену? (Технологии, масс-адопшн, партнерства).
 
         ⚖️ <b>ИТОГОВЫЙ ВЕРДИКТ:</b>
         • <b>Уровень риска:</b> [НИЗКИЙ / СРЕДНИЙ / ВЫСОКИЙ / ЭКСТРЕМАЛЬНЫЙ]
-        • <b>Мнение аналитика:</b> ...
+        • <b>Мнение аналитика:</b> (Инвестировать в долгосрок, спекулировать или бежать?).
         """
     else:
         system_prompt = f"""
         You are a Senior VC Analyst. Conduct a deep Due Diligence on {full_name} ({ticker}).
         ANSWER IN ENGLISH. 
         Use ONLY Telegram-supported tags: <b>, <i>, <code>.
-        DO NOT write a full HTML document (no <html>, no <!DOCTYPE>).
 
         TEMPLATE:
         🛡 <b>{ticker} — Fundamental Audit</b>
-        ... (structure similar to Russian version) ...
+
+        1️⃣ <b>Security & Trust</b>
+        ...
+
+        2️⃣ <b>Product & Utility</b>
+        ...
+
+        3️⃣ <b>Tokenomics</b>
+        ...
+
+        4️⃣ <b>On-Chain & Market</b>
+        ...
+
+        5️⃣ <b>Long-term Forecast (Qualitative)</b>
+        • <b>Potential:</b> Qualitative forecast of long-term value/range based on fundamentals (no specific entry points). Outlook for 1-3 years.
+        • <b>Growth Drivers:</b> What fundamental events could drive the price up?
+
+        ⚖️ <b>FINAL VERDICT:</b>
+        • <b>Risk Level:</b> [LOW / MID / HIGH / EXTREME]
+        • <b>Analyst Opinion:</b> ...
         """
 
     try:
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "You are a VC crypto analyst. Return formatted message text only. No markdown blocks."},
+                {"role": "system", "content": "You are a VC crypto analyst. Return formatted message text only."},
                 {"role": "user", "content": system_prompt}
             ],
             extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
@@ -106,7 +123,7 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
     except Exception as e:
         return f"⚠️ Error: {str(e)}"
 
-# --- СНАЙПЕР (PRO HEDGE FUND VERSION) ---
+# --- СНАЙПЕР (PRO HEDGE FUND VERSION - без изменений) ---
 async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
     if lang == "ru":
         system_prompt = f"""
@@ -114,7 +131,7 @@ async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
         Сделай глубокий разбор {full_name} ({ticker}) при цене ${price}.
         
         ОТВЕЧАЙ НА РУССКОМ. ИСПОЛЬЗУЙ ТОЛЬКО ТЕГИ: <b>, <i>, <code>.
-        НЕ ИСПОЛЬЗУЙ Markdown (**). НЕ ПИШИ <!DOCTYPE>.
+        НЕ ИСПОЛЬЗУЙ Markdown (**).
 
         ШАБЛОН:
         📊 <b>{ticker}/USDT — Среднесрочный разбор</b>
@@ -143,7 +160,7 @@ async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
     else:
         system_prompt = f"""
         You are a Senior Crypto Hedge Fund Analyst (SMC Expert). Analyze {full_name} ({ticker}) at ${price}.
-        ANSWER IN ENGLISH. Use HTML tags (<b>, <i>). NO Markdown. NO <!DOCTYPE>.
+        ANSWER IN ENGLISH. Use HTML tags (<b>, <i>).
 
         TEMPLATE:
         📊 <b>{ticker}/USDT — Mid-term Analysis</b>
