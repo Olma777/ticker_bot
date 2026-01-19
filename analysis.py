@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
@@ -11,6 +12,12 @@ client = AsyncOpenAI(
 )
 
 MODEL_NAME = "deepseek/deepseek-chat"
+
+# --- КЭШИРОВАНИЕ (MEMORY) ---
+# Чтобы бот не пересчитывал анализ каждые 5 секунд и не менял цифры.
+# Формат: { "TICKER_TYPE": (timestamp, text) }
+ANALYSIS_CACHE = {}
+CACHE_TTL = 300  # Время жизни кэша в секундах (5 минут)
 
 def clean_html(text):
     """
@@ -44,39 +51,40 @@ def clean_html(text):
     text = text.replace("</ul>", "")
 
     # === ЗАЩИТА ТЕГОВ ===
-    # Заменяем разрешенные теги на временные метки, которые точно не сломают HTML
-    # Telegram поддерживает: b, strong, i, em, u, ins, s, strike, del, code, pre
-    
+    # Заменяем разрешенные теги на временные метки
     placeholders = {}
     
     def hide_tag(match):
         tag = match.group(0)
-        # Создаем уникальный ключ
         key = f"||TAG_{len(placeholders)}||"
         placeholders[key] = tag
         return key
 
-    # Ищем разрешенные теги и прячем их
     allowed_tags = r"<(/?(b|strong|i|em|code|s|u|pre))>"
     text = re.sub(allowed_tags, hide_tag, text, flags=re.IGNORECASE)
 
     # === ОБЕЗВРЕЖИВАНИЕ ===
-    # Всё, что осталось с уголками < или > — это мусор или математика (например, "цена < 100").
-    # Экранируем их, чтобы Telegram не считал их тегами.
+    # Экранируем математические знаки < и >, чтобы не ломать HTML
     text = text.replace("<", "&lt;").replace(">", "&gt;")
 
     # === ВОССТАНОВЛЕНИЕ ===
-    # Возвращаем спрятанные теги обратно
     for key, tag in placeholders.items():
         text = text.replace(key, tag)
 
-    # Финальная чистка Markdown символов, чтобы не было каши
+    # Финальная чистка
     text = text.replace("**", "").replace("##", "")
-    
     return text.strip()
 
-# --- АУДИТ (PRO VC VERSION + LONG TERM) ---
+# --- АУДИТ (PRO VC VERSION) ---
 async def get_crypto_analysis(ticker, full_name, lang="ru"):
+    # 1. Проверяем кэш
+    cache_key = f"{ticker}_audit_{lang}"
+    if cache_key in ANALYSIS_CACHE:
+        timestamp, cached_text = ANALYSIS_CACHE[cache_key]
+        if time.time() - timestamp < CACHE_TTL:
+            return cached_text  # Возвращаем старый ответ, если прошло < 5 минут
+
+    # 2. Формируем запрос
     if lang == "ru":
         system_prompt = f"""
         Ты — Старший Аналитик Венчурного Фонда (VC). 
@@ -121,9 +129,7 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
     else:
         system_prompt = f"""
         You are a Senior VC Analyst. Conduct a deep Due Diligence on {full_name} ({ticker}).
-        ANSWER IN ENGLISH. 
-        Use ONLY Telegram-supported tags: <b>, <i>, <code>.
-
+        ANSWER IN ENGLISH. Use ONLY Telegram-supported tags: <b>, <i>, <code>.
         TEMPLATE:
         🛡 <b>{ticker} — Fundamental Audit</b>
         ... (English structure identical to Russian) ...
@@ -136,14 +142,28 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
                 {"role": "system", "content": "You are a VC crypto analyst. Return text with strictly valid Telegram HTML tags."},
                 {"role": "user", "content": system_prompt}
             ],
+            temperature=0.2,  # Низкая температура для стабильности
             extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
         )
-        return clean_html(response.choices[0].message.content)
+        result = clean_html(response.choices[0].message.content)
+        
+        # Сохраняем в кэш
+        ANALYSIS_CACHE[cache_key] = (time.time(), result)
+        return result
+
     except Exception as e:
         return f"⚠️ Error: {str(e)}"
 
 # --- СНАЙПЕР (PRO HEDGE FUND + ALTERNATIVE SCENARIO) ---
 async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
+    # 1. Проверяем кэш
+    cache_key = f"{ticker}_sniper_{lang}"
+    if cache_key in ANALYSIS_CACHE:
+        timestamp, cached_text = ANALYSIS_CACHE[cache_key]
+        if time.time() - timestamp < CACHE_TTL:
+            return cached_text
+
+    # 2. Формируем запрос
     if lang == "ru":
         system_prompt = f"""
         Ты — Старший Аналитик Крипто-Хеджфонда (SMC Expert).
@@ -190,14 +210,10 @@ async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
         system_prompt = f"""
         You are a Senior Crypto Hedge Fund Analyst. Analyze {full_name} ({ticker}) at ${price}.
         ANSWER IN ENGLISH. Use HTML tags (<b>, <i>).
-
         TEMPLATE:
         📊 <b>{ticker}/USDT — Mid-term Analysis</b>
         ...
         5️⃣ <b>Alternative Scenario (Counter-trend/Hedge)</b>
-        • <b>Opportunity:</b> Can we trade towards the entry point?
-        • <b>Risk:</b> Why is it risky?
-        • <b>Setup:</b> Targets if viable. If not, write "Wait for entry".
         ...
         """
 
@@ -208,8 +224,14 @@ async def get_sniper_analysis(ticker, full_name, price, lang="ru"):
                 {"role": "system", "content": "You are a top-tier crypto analyst. Output raw text with Telegram HTML tags only."},
                 {"role": "user", "content": system_prompt}
             ],
+            temperature=0.1,  # Сверх-низкая температура для точности сигналов
             extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
         )
-        return clean_html(response.choices[0].message.content)
+        result = clean_html(response.choices[0].message.content)
+        
+        # Сохраняем в кэш
+        ANALYSIS_CACHE[cache_key] = (time.time(), result)
+        return result
+
     except Exception as e:
         return f"⚠️ Error: {str(e)}"
