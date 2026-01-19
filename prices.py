@@ -1,19 +1,16 @@
 import aiohttp
 
-# Шпаргалка имен (на случай если CoinCap не найдет)
+# Шпаргалка имен (на случай если источник не отдаст имя)
 COIN_NAMES = {
     "BTC": "Bitcoin", "ETH": "Ethereum", "USDT": "Tether", "BNB": "BNB",
     "SOL": "Solana", "XRP": "XRP", "USDC": "USDC", "ADA": "Cardano",
-    "AVAX": "Avalanche", "DOGE": "Dogecoin", "TRX": "TRON", "DOT": "Polkadot",
-    "LINK": "Chainlink", "MATIC": "Polygon", "TON": "Toncoin", "SHIB": "Shiba Inu",
-    "LTC": "Litecoin", "BCH": "Bitcoin Cash", "ATOM": "Cosmos", "UNI": "Uniswap",
-    "ICP": "Internet Computer", "NEAR": "NEAR Protocol", "APT": "Aptos", 
-    "ARB": "Arbitrum", "OP": "Optimism", "PEPE": "Pepe"
+    "AVAX": "Avalanche", "DOGE": "Dogecoin", "TON": "Toncoin", 
+    "PEPE": "Pepe", "SHIB": "Shiba Inu"
 }
 
 async def get_crypto_price(ticker):
     """
-    Возвращает словарь с данными: {price, name, rank, ticker}
+    Ищет цену в 3 источниках: CoinCap -> Binance -> DexScreener (DEX).
     """
     ticker_upper = ticker.upper().replace("USDT", "").replace("USD", "")
     
@@ -23,7 +20,7 @@ async def get_crypto_price(ticker):
 
     async with aiohttp.ClientSession(headers=headers) as session:
         
-        # 1. COINCAP
+        # --- 1. COINCAP (Топовые монеты + Рейтинг) ---
         try:
             url = f"https://api.coincap.io/v2/assets?search={ticker_upper}"
             async with session.get(url, timeout=5) as response:
@@ -43,10 +40,10 @@ async def get_crypto_price(ticker):
         except Exception:
             pass 
 
-        # 2. BINANCE
+        # --- 2. BINANCE (Биржевые цены) ---
         try:
             url = f"https://api.binance.com/api/v3/ticker/price?symbol={ticker_upper}USDT"
-            async with session.get(url, timeout=5) as response:
+            async with session.get(url, timeout=3) as response:
                 if response.status == 200:
                     data = await response.json()
                     price = float(data["price"])
@@ -59,6 +56,42 @@ async def get_crypto_price(ticker):
                         "rank": "?",
                         "ticker": ticker_upper
                     }, None
+        except Exception:
+            pass
+
+        # --- 3. DEXSCREENER (Мем-коины, Щиткоины, Новинки) ---
+        # Самый мощный поиск: находит всё, что есть на DEX (Uniswap, Raydium и т.д.)
+        try:
+            # Ищем пары по тикеру
+            url = f"https://api.dexscreener.com/latest/dex/search?q={ticker_upper}"
+            async with session.get(url, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    pairs = data.get('pairs', [])
+                    
+                    if pairs:
+                        # Берем самую ликвидную пару (первую в списке)
+                        best_pair = pairs[0]
+                        price = float(best_pair['priceUsd'])
+                        
+                        # Красивый формат цены (для мемов с кучей нулей: 0.00004)
+                        if price < 0.01:
+                            fmt_price = f"{price:.8f}"
+                        elif price < 1:
+                            fmt_price = f"{price:.4f}"
+                        else:
+                            fmt_price = f"{price:.2f}"
+
+                        # Определяем сеть (Solana, Base, Ethereum)
+                        chain = best_pair.get('chainId', 'DEX').capitalize()
+                        full_name = best_pair['baseToken']['name']
+                        
+                        return {
+                            "price": fmt_price,
+                            "name": f"{full_name} ({chain})", # Добавляем название сети
+                            "rank": "DEX", # У таких монет нет официального ранга
+                            "ticker": ticker_upper
+                        }, None
         except Exception:
             pass
 
