@@ -1,11 +1,13 @@
 import aiohttp
+import asyncio
 
 # Словарь имен для красивого вывода
 COIN_NAMES = {
     "BTC": "Bitcoin", "ETH": "Ethereum", "USDT": "Tether", "BNB": "BNB",
     "SOL": "Solana", "XRP": "XRP", "USDC": "USDC", "ADA": "Cardano",
     "AVAX": "Avalanche", "DOGE": "Dogecoin", "TON": "Toncoin", 
-    "PEPE": "Pepe", "SHIB": "Shiba Inu"
+    "PEPE": "Pepe", "SHIB": "Shiba Inu", "SUI": "Sui", "ARB": "Arbitrum",
+    "APT": "Aptos", "LDO": "Lido DAO", "OP": "Optimism", "TIA": "Celestia"
 }
 
 async def get_crypto_price(ticker):
@@ -76,48 +78,78 @@ async def get_crypto_price(ticker):
 
     return None, True
 
-# --- ФУНКЦИЯ ДЛЯ DAILY BRIEFING ---
+# --- УСИЛЕННАЯ ФУНКЦИЯ ДЛЯ DAILY BRIEFING ---
 async def get_market_summary():
     """
-    Собирает данные для утреннего брифинга:
-    1. Доминация BTC
-    2. Цена BTC
-    3. Топ монет (для поиска нарратива)
+    Собирает 'Железобетонные' данные для брифинга:
+    1. Доминация BTC (CoinCap -> Fallback CoinGecko)
+    2. Цена BTC (через get_crypto_price)
+    3. ТОП ГЕЙНЕРЫ (Binance API) - Самый надежный источник
     """
     headers = {"User-Agent": "Mozilla/5.0"}
     summary = {}
 
     async with aiohttp.ClientSession(headers=headers) as session:
-        # 1. Доминация BTC (CoinCap Global)
+        # --- 1. ДОМИНАЦИЯ BTC ---
+        dominance = "Unknown"
+        # Попытка А: CoinCap
         try:
-            async with session.get("https://api.coincap.io/v2/global", timeout=5) as response:
+            async with session.get("https://api.coincap.io/v2/global", timeout=3) as response:
                 if response.status == 200:
                     data = await response.json()
-                    summary['btc_dominance'] = f"{float(data['data']['bitcoinDominancePercentage']):.2f}"
-                else:
-                    summary['btc_dominance'] = "N/A"
-        except:
-            summary['btc_dominance'] = "Unknown"
+                    dom = float(data['data']['bitcoinDominancePercentage'])
+                    dominance = f"{dom:.2f}"
+        except: pass
+        
+        # Попытка Б: CoinGecko (если CoinCap упал)
+        if dominance == "Unknown":
+            try:
+                async with session.get("https://api.coingecko.com/api/v3/global", timeout=3) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        dom = float(data['data']['market_cap_percentage']['btc'])
+                        dominance = f"{dom:.2f}"
+            except: pass
+        
+        summary['btc_dominance'] = dominance
 
-        # 2. Цена BTC
+        # --- 2. ЦЕНА BTC ---
         btc_data, _ = await get_crypto_price("BTC")
         summary['btc_price'] = btc_data['price'] if btc_data else "Unknown"
 
-        # 3. Топ монет (ищем нарративы)
+        # --- 3. ТОП ГЕЙНЕРЫ (СЕКТОР ДНЯ) ЧЕРЕЗ BINANCE ---
+        # Это даст реальных лидеров, а не ошибку API
+        top_movers = []
         try:
-            async with session.get("https://api.coincap.io/v2/assets?limit=15", timeout=5) as response:
+            url = "https://api.binance.com/api/v3/ticker/24hr"
+            async with session.get(url, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
-                    coins_list = []
-                    for coin in data['data']:
-                        sym = coin['symbol']
-                        change = float(coin['changePercent24Hr'])
-                        if sym not in ["USDT", "USDC", "FDUSD"]:
-                            coins_list.append(f"{sym} ({change:+.2f}%)")
-                    summary['top_coins'] = ", ".join(coins_list[:10])
-                else:
-                    summary['top_coins'] = "Bitcoin, Ethereum, Solana"
-        except:
-            summary['top_coins'] = "Top alts unavailable"
+                    # Фильтруем: только USDT пары, объем > 10M$ (чтобы убрать мусор)
+                    valid_coins = []
+                    for ticker in data:
+                        symbol = ticker['symbol']
+                        if symbol.endswith("USDT"):
+                            vol = float(ticker['quoteVolume'])
+                            if vol > 10_000_000: # Объем > 10 млн$
+                                change = float(ticker['priceChangePercent'])
+                                clean_sym = symbol.replace("USDT", "")
+                                # Исключаем стейблы и левередж токены (UP/DOWN)
+                                if "UP" not in clean_sym and "DOWN" not in clean_sym and clean_sym not in ["USDC", "FDUSD", "USDT"]:
+                                    valid_coins.append({"symbol": clean_sym, "change": change})
+                    
+                    # Сортируем по росту (Топ-5 лидеров)
+                    valid_coins.sort(key=lambda x: x['change'], reverse=True)
+                    top_5 = valid_coins[:5]
+                    
+                    # Формируем строку: "SUI (+15%), SEI (+12%)"
+                    top_movers = [f"{c['symbol']} ({c['change']:+.1f}%)" for c in top_5]
+        except: pass
+
+        if top_movers:
+            summary['top_coins'] = ", ".join(top_movers)
+        else:
+            # Аварийный вариант (если даже Binance лежит)
+            summary['top_coins'] = "BTC, ETH, SOL (Binance Data Unavailable)"
 
     return summary
