@@ -152,9 +152,10 @@ async def callback_time(callback: CallbackQuery):
     
     await callback.answer()
 
+# В main.py — замените эти два хендлера:
+
 @dp.message(Command("audit"))
 async def audit_handler(message: Message):
-    """Фундаментальный анализ монеты."""
     args = message.text.split()
     if len(args) < 2:
         await message.answer("⚠️ Введите тикер.\nПример: <code>/audit SOL</code>", parse_mode=ParseMode.HTML)
@@ -171,13 +172,17 @@ async def audit_handler(message: Message):
         
         text = await get_crypto_analysis(ticker, price_data['name'], "ru")
         await loading_msg.delete()
-        await message.answer(text, parse_mode=ParseMode.HTML)
+        
+        # Защита от HTML-ошибок
+        try:
+            await message.answer(text, parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.answer(text, parse_mode=None)  # fallback
     except Exception as e:
         await loading_msg.edit_text(f"⚠️ Ошибка анализа: {e}")
 
 @dp.message(Command("sniper"))
 async def sniper_handler(message: Message):
-    """Технический анализ и поиск точки входа."""
     args = message.text.split()
     if len(args) < 2:
         await message.answer("⚠️ Введите тикер.\nПример: <code>/sniper BTC</code>", parse_mode=ParseMode.HTML)
@@ -194,7 +199,12 @@ async def sniper_handler(message: Message):
         
         text = await get_sniper_analysis(ticker, price_data['name'], price_data['price'], "ru")
         await loading_msg.delete()
-        await message.answer(text, parse_mode=ParseMode.HTML)
+        
+        # Защита от HTML-ошибок
+        try:
+            await message.answer(text, parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.answer(text, parse_mode=None)  # fallback
     except Exception as e:
         await loading_msg.edit_text(f"⚠️ Ошибка анализа: {e}")
 
