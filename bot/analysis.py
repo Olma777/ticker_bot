@@ -286,118 +286,142 @@ async def get_sniper_analysis(ticker, lang="ru"):
 
 # --- 3. DAILY BRIEFING — ГЛУБОКИЙ АНАЛИЗ ПО СЕКТОРАМ ---
 async def get_daily_briefing(market_data=None):
-    date_str = datetime.now().strftime("%d.%m.%Y")
-    cache_key = f"daily_briefing_{date_str}"
-    
-    if cache_key in ANALYSIS_CACHE:
-        timestamp, cached_text = ANALYSIS_CACHE[cache_key]
-        if time.time() - timestamp < DAILY_CACHE_TTL:
-            return cached_text
-
-    # Если market_data не передан, получаем его
-    if not market_data:
-        market_data = await get_market_summary()
-
-    # Получаем Market Regime
-    regime_data = await get_market_regime()
-    regime_status = regime_data.get('status', 'NEUTRAL') if regime_data else "NEUTRAL"
-    regime_z = regime_data.get('z_score', 0.0) if regime_data else 0.0
-    
-    regime_warning = ""
-    if regime_status == "COMPRESSION":
-        regime_warning = f"⚠️ <b>ВНИМАНИЕ: Рынок в фазе СЖАТИЯ (Z-Score: {regime_z:.2f}). Высокий риск взрывной волатильности!</b>\n\n"
-    elif regime_status == "EXPANSION":
-        regime_warning = f"ℹ️ <b>Рынок в фазе РАСШИРЕНИЯ (Z-Score: {regime_z:.2f}). Тренд уже развился.</b>\n\n"
-
-    top_coins_raw = market_data.get('top_coins', '1. BTC: $96000\n2. ETH: $2800\n3. SOL: $140')
-    btc_dom = market_data.get('btc_dominance', '56.5')
-
-    # Парсим монеты: [("BTC", "96000"), ("ETH", "2800"), ("SOL", "140")]
-    coins = []
-    for line in top_coins_raw.split('\n'):
-        if ':' in line:
-            parts = line.split(':')
-            if len(parts) >= 2:
-                ticker_part = parts[0].strip()
-                # Извлекаем тикер (последнее слово перед ":")
-                ticker = ticker_part.split()[-1] if ticker_part else ""
-                price_part = parts[1].strip().replace('$', '').replace(',', '')
-                try:
-                    price = float(price_part)
-                    fmt_price = f"{price:.8f}" if price < 0.01 else (f"{price:.4f}" if price < 1 else f"{price:.2f}")
-                    coins.append((ticker, fmt_price))
-                except ValueError:
-                    continue
-
-    if not coins:
-        return "⚠️ Не удалось распознать монеты для анализа."
-
-    # Формируем входной промпт для LLM
-    coins_context = "\n".join([f"- {ticker}: ${price}" for ticker, price in coins])
-    sectors_mentioned = set(get_sector(ticker) for ticker, _ in coins)
-    sectors_list = ", ".join(sorted(sectors_mentioned))
-
-    system_prompt = f"""
-    Ты — главный аналитик крипто-фонда. Сегодня {date_str}. BTC Dom: {btc_dom}%.
-    
-    Рынок сейчас в состоянии {regime_status}.
-    {regime_warning}
-    
-    ВХОДНЫЕ ДАННЫЕ (ТОЛЬКО ЭТИ МОНЕТЫ — НЕ ПРИДУМЫВАЙ ДРУГИЕ):
-    {coins_context}
-    
-    ЗАДАЧА:
-    Проведи глубокий анализ этих 3 монет по шаблону "Поиск монет по секторам".  
-    Для каждой монеты:
-    1. Определи её сектор (AI, Layer-2, RWA, DePIN, GameFi и т.д.).
-    2. Проведи анализ готовности к пампу, используя логику маркетмейкеров.
-    3. Дай фьючерсный сигнал ТОЛЬКО в направлении LONG (если уместно).
-    
-    ❗️ ЖЁСТКОЕ ПРАВИЛО:  
-    Все цены — из списка выше. НЕ ПРИДУМЫВАЙ ЦЕНЫ.  
-    Если монета не подходит под памп — честно так и напиши.
-    Если статус COMPRESSION — начни ответ с предупреждения о рисках волатильности.
-    ОБЯЗАТЕЛЬНО используй формат "Макро-режим (Trend Level Logic): [STATUS]" в заголовке.
-    
-    ФОРМАТ ВЫВОДА (Telegram HTML):
-    
-    🌅 <b>Market Pulse: {date_str}</b>
-    📊 <b>Макро-режим (Trend Level Logic):</b> {regime_status} (BTC Dom {btc_dom}%)
-    🔥 <b>Активные сектора:</b> {sectors_list}
-    
-    💎 <b>Watchlist по секторам:</b>
-    
-    1. <b>{coins[0][0]}</b> — [Сектор]
-       💵 <b>Цена:</b> ${coins[0][1]}
-       • Ключевые уровни: ...
-       • Готовность к пампу: ...
-       • Фундаментал: ...
-       • 🎯 <b>Сигнал:</b> LONG
-         └ Вход: $...
-         └ TP1/TP2/TP3: $... / $... / $...
-         └ SL: $...
-    
-    2. <b>{coins[1][0]}</b> — [Сектор]
-       ...
-    
-    3. <b>{coins[2][0]}</b> — [Сектор]
-       ...
-    
-    👇 <i>Детальный расчет сделки: /sniper [тикер]</i>
-    """
-
     try:
-        response = await client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "You are a strict crypto analyst. Use ONLY provided prices. Do NOT hallucinate. Output in Telegram HTML."},
-                {"role": "user", "content": system_prompt}
-            ],
-            temperature=0.2,
-            extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
-        )
-        result = clean_html(response.choices[0].message.content)
-        ANALYSIS_CACHE[cache_key] = (time.time(), result)
-        return result
+        date_str = datetime.now().strftime("%d.%m.%Y")
+        cache_key = f"daily_briefing_{date_str}"
+        
+        if cache_key in ANALYSIS_CACHE:
+            timestamp, cached_text = ANALYSIS_CACHE[cache_key]
+            if time.time() - timestamp < DAILY_CACHE_TTL:
+                return cached_text
+
+        # Если market_data не передан, получаем его
+        if not market_data:
+            try:
+                market_data = await get_market_summary()
+            except Exception as e:
+                print(f"Error fetching market summary: {e}")
+                market_data = {}
+
+        # Получаем Market Regime
+        try:
+            regime_data = await get_market_regime()
+        except Exception as e:
+            print(f"Error fetching market regime: {e}")
+            regime_data = None
+
+        regime_status = regime_data.get('status', 'NEUTRAL') if regime_data else "NEUTRAL"
+        regime_z = regime_data.get('z_score', 0.0) if regime_data else 0.0
+        
+        regime_warning = ""
+        if regime_status == "COMPRESSION":
+            regime_warning = f"⚠️ <b>ВНИМАНИЕ: Рынок в фазе СЖАТИЯ (Z-Score: {regime_z:.2f}). Высокий риск взрывной волатильности!</b>\n\n"
+        elif regime_status == "EXPANSION":
+            regime_warning = f"ℹ️ <b>Рынок в фазе РАСШИРЕНИЯ (Z-Score: {regime_z:.2f}). Тренд уже развился.</b>\n\n"
+
+        if not market_data:
+             market_data = {}
+
+        top_coins_raw = market_data.get('top_coins', '1. BTC: $96000\n2. ETH: $2800\n3. SOL: $140')
+        btc_dom = market_data.get('btc_dominance', '56.5')
+
+        # Парсим монеты: [("BTC", "96000"), ("ETH", "2800"), ("SOL", "140")]
+        coins = []
+        if top_coins_raw:
+            for line in top_coins_raw.split('\n'):
+                if ':' in line:
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        ticker_part = parts[0].strip()
+                        # Извлекаем тикер (последнее слово перед ":")
+                        ticker = ticker_part.split()[-1] if ticker_part else ""
+                        price_part = parts[1].strip().replace('$', '').replace(',', '')
+                        try:
+                            price = float(price_part)
+                            fmt_price = f"{price:.8f}" if price < 0.01 else (f"{price:.4f}" if price < 1 else f"{price:.2f}")
+                            coins.append((ticker, fmt_price))
+                        except ValueError:
+                            continue
+
+        if not coins:
+            # Fallback if parsing failed
+            coins = [("BTC", "96000"), ("ETH", "2800"), ("SOL", "140")]
+
+        # Формируем входной промпт для LLM
+        coins_context = "\n".join([f"- {ticker}: ${price}" for ticker, price in coins])
+        sectors_mentioned = set(get_sector(ticker) for ticker, _ in coins)
+        sectors_list = ", ".join(sorted(sectors_mentioned))
+
+        system_prompt = f"""
+        Ты — главный аналитик крипто-фонда. Сегодня {date_str}. BTC Dom: {btc_dom}%.
+        
+        Рынок сейчас в состоянии {regime_status}.
+        {regime_warning}
+        
+        ВХОДНЫЕ ДАННЫЕ (ТОЛЬКО ЭТИ МОНЕТЫ — НЕ ПРИДУМЫВАЙ ДРУГИЕ):
+        {coins_context}
+        
+        ЗАДАЧА:
+        Проведи глубокий анализ этих 3 монет по шаблону "Поиск монет по секторам".  
+        Для каждой монеты:
+        1. Определи её сектор (AI, Layer-2, RWA, DePIN, GameFi и т.д.).
+        2. Проведи анализ готовности к пампу, используя логику маркетмейкеров.
+        3. Дай фьючерсный сигнал ТОЛЬКО в направлении LONG (если уместно).
+        
+        ❗️ ЖЁСТКОЕ ПРАВИЛО:  
+        Все цены — из списка выше. НЕ ПРИДУМЫВАЙ ЦЕНЫ.  
+        Если монета не подходит под памп — честно так и напиши.
+        Если статус COMPRESSION — начни ответ с предупреждения о рисках волатильности.
+        ОБЯЗАТЕЛЬНО используй формат "Макро-режим (Trend Level Logic): [STATUS]" в заголовке.
+        
+        ФОРМАТ ВЫВОДА (Telegram HTML):
+        
+        🌅 <b>Market Pulse: {date_str}</b>
+        📊 <b>Макро-режим (Trend Level Logic):</b> {regime_status} (BTC Dom {btc_dom}%)
+        🔥 <b>Активные сектора:</b> {sectors_list}
+        
+        💎 <b>Watchlist по секторам:</b>
+        
+        1. <b>{coins[0][0]}</b> — [Сектор]
+           💵 <b>Цена:</b> ${coins[0][1]}
+           • Ключевые уровни: ...
+           • Готовность к пампу: ...
+           • Фундаментал: ...
+           • 🎯 <b>Сигнал:</b> LONG
+             └ Вход: $...
+             └ TP1/TP2/TP3: $... / $... / $...
+             └ SL: $...
+        
+        2. <b>{coins[1][0]}</b> — [Сектор]
+           ...
+        
+        3. <b>{coins[2][0]}</b> — [Сектор]
+           ...
+        
+        👇 <i>Детальный расчет сделки: /sniper [тикер]</i>
+        """
+
+        try:
+            response = await client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": "You are a strict crypto analyst. Use ONLY provided prices. Do NOT hallucinate. Output in Telegram HTML."},
+                    {"role": "user", "content": system_prompt}
+                ],
+                temperature=0.2,
+                extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
+            )
+            result = clean_html(response.choices[0].message.content)
+            
+            if not result:
+                 return "⚠️ Не удалось получить ответ от нейросети. Попробуйте еще раз через минуту."
+
+            ANALYSIS_CACHE[cache_key] = (time.time(), result)
+            return result
+        except Exception as e:
+            print(f"LLM Error: {e}")
+            return "⚠️ Не удалось получить ответ от нейросети. Попробуйте еще раз через минуту."
+
     except Exception as e:
-        return f"⚠️ Ошибка брифинга: {str(e)}"
+        print(f"Critical Error in daily briefing: {e}")
+        return f"⚠️ Произошла внутренняя ошибка при формировании брифинга. Попробуйте позже."
