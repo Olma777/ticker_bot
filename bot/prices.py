@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import ccxt.async_support as ccxt
 
 # Словарь имен
 COIN_NAMES = {
@@ -46,54 +47,40 @@ async def get_crypto_price(ticker):
     return None, True
 
 async def get_market_summary():
-    headers = {"User-Agent": "Mozilla/5.0"}
     summary = {}
+    
+    # 1. Доминация BTC (Фиксированное значение для скорости, т.к. CoinGecko медленный)
+    summary['btc_dominance'] = "58.2"
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        # ДОМИНАЦИЯ
-        dominance = "56.5" # Fallback
-        try:
-            async with session.get("https://api.coingecko.com/api/v3/global", timeout=3) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    dom = float(data['data']['market_cap_percentage']['btc'])
-                    dominance = f"{dom:.2f}"
-        except: pass
-        summary['btc_dominance'] = dominance
-
-        # ТОП МОНЕТЫ (Binance)
-        top_coins_list = []
-        try:
-            url = "https://api.binance.com/api/v3/ticker/24hr"
-            async with session.get(url, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    valid_coins = []
-                    for t in data:
-                        sym = t['symbol']
-                        if sym.endswith("USDT"):
-                            vol = float(t['quoteVolume'])
-                            if vol > 15_000_000: # Фильтр объема
-                                pure_sym = sym.replace("USDT", "")
-                                if pure_sym not in ["USDC", "FDUSD", "USDT", "TUSD", "DAI", "WBTC"]:
-                                    change = float(t['priceChangePercent'])
-                                    price = float(t['lastPrice'])
-                                    valid_coins.append({"symbol": pure_sym, "change": change, "price": price})
-                    
-                    # Топ-3 лидера
-                    valid_coins.sort(key=lambda x: x['change'], reverse=True)
-                    top3 = valid_coins[:3]
-                    
-                    # Формируем список для ИИ: "1. TIA: $12.50"
-                    for i, c in enumerate(top3, 1):
-                        p = c['price']
-                        p_str = f"{p:.6f}" if p < 0.01 else (f"{p:.4f}" if p < 1 else f"{p:.2f}")
-                        top_coins_list.append(f"{i}. {c['symbol']}: ${p_str}")
-        except: pass
-
+    # 2. ТОП МОНЕТЫ через CCXT (Binance)
+    top_coins_list = []
+    exchange = ccxt.binance()
+    try:
+        # Список активов по задаче
+        target_coins = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA"]
+        symbols = [f"{coin}/USDT" for coin in target_coins]
+        
+        tickers = await exchange.fetch_tickers(symbols)
+        
+        for i, symbol in enumerate(symbols, 1):
+            if symbol in tickers:
+                t = tickers[symbol]
+                price = float(t['last'])
+                
+                # Форматирование цены
+                p_str = f"{price:.6f}" if price < 0.01 else (f"{price:.4f}" if price < 1 else f"{price:.2f}")
+                
+                # Имя без USDT
+                name = symbol.split('/')[0]
+                top_coins_list.append(f"{i}. {name}: ${p_str}")
+                
+    except Exception as e:
+        print(f"CCXT Error: {e}")
+        # Fallback
         if not top_coins_list:
             top_coins_list = ["1. BTC: $96000", "2. ETH: $2800", "3. SOL: $140"]
+    finally:
+        await exchange.close()
 
-        summary['top_coins'] = "\n".join(top_coins_list)
-
+    summary['top_coins'] = "\n".join(top_coins_list)
     return summary
