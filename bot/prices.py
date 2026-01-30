@@ -52,47 +52,36 @@ async def get_market_summary():
     # 1. Доминация BTC (Фиксированное значение для скорости)
     summary['btc_dominance'] = "N/A"
 
-    # 2. ТОП МОНЕТЫ через CCXT (Binance)
-    top_coins_list = []
+    # 2. ЦЕЛЕВОЙ СПИСОК МОНЕТ (Watchlist для секторов)
+    target_coins = ["BTC", "ETH", "SOL", "BNB", "FET", "RENDER", "WLD", "ONDO", "OM", "ARB", "OP", "HNT", "FIL", "TIA"]
+    
+    market_text_list = []
     exchange = ccxt.binance()
     try:
-        # Загружаем тикеры
+        # Загружаем все тикеры
         tickers = await exchange.fetch_tickers()
         
-        # Фильтруем пары к USDT
-        usdt_pairs = []
-        for symbol, data in tickers.items():
-            if symbol.endswith('/USDT'):
-                # Исключаем мусорные пары (UP/DOWN/BEAR/BULL)
-                if any(x in symbol for x in ['UP/', 'DOWN/', 'BEAR/', 'BULL/', 'USDC/', 'FDUSD/', 'TUSD/']):
-                    continue
-                usdt_pairs.append(data)
-        
-        # Сортируем по quoteVolume (объем в USDT)
-        sorted_pairs = sorted(usdt_pairs, key=lambda x: x['quoteVolume'] if x.get('quoteVolume') else 0, reverse=True)
-        
-        # Берем топ-20
-        top_20 = sorted_pairs[:20]
-        
-        for t in top_20:
-            symbol = t['symbol']
-            price = float(t['last'])
-            name = symbol.split('/')[0]
+        for coin in target_coins:
+            pair = f"{coin}/USDT"
             
-            # Форматирование цены
-            if price < 0.01: fmt = f"{price:.8f}"
-            elif price < 1: fmt = f"{price:.4f}"
-            else: fmt = f"{price:.2f}"
-            
-            top_coins_list.append(f"{name}: ${fmt}")
+            if pair in tickers:
+                data = tickers[pair]
+                price = float(data['last'])
+                
+                # Форматирование цены
+                if price < 0.01: fmt = f"{price:.8f}"
+                elif price < 1: fmt = f"{price:.4f}"
+                else: fmt = f"{price:.2f}"
+                
+                market_text_list.append(f"{coin}: ${fmt}")
             
     except Exception as e:
         print(f"CCXT Error: {e}")
         # Fallback
-        if not top_coins_list:
-            top_coins_list = ["BTC: $96000", "ETH: $2800", "SOL: $140"]
+        if not market_text_list:
+            market_text_list = ["BTC: $96000", "ETH: $2800", "SOL: $140"]
     finally:
         await exchange.close()
 
-    summary['top_coins'] = ", ".join(top_coins_list)
+    summary['top_coins'] = ", ".join(market_text_list)
     return summary
