@@ -71,10 +71,10 @@ async def get_market_summary():
         # Сортируем по quoteVolume (объем в USDT)
         sorted_pairs = sorted(usdt_pairs, key=lambda x: x['quoteVolume'] if x.get('quoteVolume') else 0, reverse=True)
         
-        # Берем топ-20
-        top_20 = sorted_pairs[:20]
+        # Берем топ-15
+        top_15 = sorted_pairs[:15]
         
-        for t in top_20:
+        for t in top_15:
             symbol = t['symbol']
             price = float(t['last'])
             name = symbol.split('/')[0]
