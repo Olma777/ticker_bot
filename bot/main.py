@@ -21,6 +21,7 @@ from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_bri
 # Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 if not TOKEN:
     print("❌ ОШИБКА: Токен бота не найден! Убедитесь, что BOT_TOKEN есть в .env")
@@ -75,8 +76,7 @@ async def check_and_send_briefings():
 
     try:
         # 3. Генерируем контент ОДИН РАЗ для всех (экономия запросов к AI)
-        market_data = await get_market_summary()
-        briefing_text = await get_daily_briefing(market_data)
+        briefing_text = await get_daily_briefing()
         
         # 4. Рассылаем
         for user_id in users_to_send:
@@ -88,6 +88,23 @@ async def check_and_send_briefings():
                     del USER_SETTINGS[user_id]
     except Exception as e:
         logging.error(f"⚠️ Ошибка при рассылке: {e}")
+
+async def broadcast_daily_briefing():
+    """
+    Авто-постинг брифинга в публичный канал.
+    """
+    if not CHANNEL_ID:
+        logging.warning("⚠️ CHANNEL_ID не задан, авто-постинг пропущен.")
+        return
+
+    try:
+        logging.info("📢 Начинаю авто-постинг в канал...")
+        briefing_text = await get_daily_briefing()
+        
+        await bot.send_message(chat_id=CHANNEL_ID, text=briefing_text, parse_mode=ParseMode.HTML)
+        logging.info(f"📢 Авто-пост успешно отправлен в канал {CHANNEL_ID}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка авто-постинга в канал: {e}")
 
 # --- ОБРАБОТЧИКИ КОМАНД (HANDLERS) ---
 
@@ -216,10 +233,22 @@ async def daily_manual_handler(message: Message):
     except Exception as e:
         await loading_msg.edit_text(f"⚠️ Не удалось собрать данные: {e}")
 
+@dp.message(Command("test_post"))
+async def test_post_handler(message: Message):
+    """Тестовая команда для проверки авто-постинга в канал."""
+    await message.answer("🚀 Запускаю тест авто-постинга...", parse_mode=ParseMode.HTML)
+    await broadcast_daily_briefing()
+    await message.answer("✅ Тест завершен. Проверьте канал и логи.", parse_mode=ParseMode.HTML)
+
 # --- ЗАПУСК БОТА ---
 async def main():
-    # Настраиваем планировщик: запускать check_and_send_briefings каждый час в 00 минут
+    # Настраиваем планировщик:
+    # 1. Рассылка пользователям (каждый час)
     scheduler.add_job(check_and_send_briefings, 'cron', minute=0)
+    
+    # 2. Авто-постинг в канал (07:00 UTC)
+    scheduler.add_job(broadcast_daily_briefing, 'cron', hour=7, minute=0)
+    
     scheduler.start()
     
     print("🤖 Бот запущен! Планировщик активен.")
