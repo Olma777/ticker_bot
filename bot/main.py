@@ -18,6 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bot.prices import get_crypto_price, get_market_summary
 from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing
 
+# 1. НАСТРОЙКИ
 # Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -38,8 +39,6 @@ scheduler = AsyncIOScheduler()
 # --- ВРЕМЕННАЯ БАЗА ДАННЫХ (В ПАМЯТИ) ---
 # Хранит настройки времени рассылки для пользователей.
 # Формат: { user_id: hour_int }
-# Пример: { 12345678: 9, 87654321: 14 }
-# При перезапуске бота очищается (для продакшена нужна база данных типа SQLite/Postgres)
 USER_SETTINGS = {}
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -89,22 +88,26 @@ async def check_and_send_briefings():
     except Exception as e:
         logging.error(f"⚠️ Ошибка при рассылке: {e}")
 
+# 2. ФУНКЦИЯ РАССЫЛКИ (С ЛОГАМИ)
 async def broadcast_daily_briefing():
     """
     Авто-постинг брифинга в публичный канал.
     """
+    logging.info(f"🚀 Начинаю рассылку. Channel ID: {CHANNEL_ID}")
+    
     if not CHANNEL_ID:
-        logging.warning("⚠️ CHANNEL_ID не задан, авто-постинг пропущен.")
+        logging.error("❌ CHANNEL_ID не найден в переменных окружения!")
         return
 
     try:
-        logging.info("📢 Начинаю авто-постинг в канал...")
+        # Получаем текст (внутри функции уже есть логика получения данных)
         briefing_text = await get_daily_briefing()
         
+        # Отправляем в канал
         await bot.send_message(chat_id=CHANNEL_ID, text=briefing_text, parse_mode=ParseMode.HTML)
-        logging.info(f"📢 Авто-пост успешно отправлен в канал {CHANNEL_ID}")
+        logging.info(f"✅ УСПЕХ: Сообщение отправлено в канал {CHANNEL_ID}")
     except Exception as e:
-        logging.error(f"❌ Ошибка авто-постинга в канал: {e}")
+        logging.error(f"❌ ОШИБКА рассылки: {e}")
 
 # --- ОБРАБОТЧИКИ КОМАНД (HANDLERS) ---
 
@@ -233,16 +236,18 @@ async def daily_manual_handler(message: Message):
     except Exception as e:
         await loading_msg.edit_text(f"⚠️ Не удалось собрать данные: {e}")
 
+# 3. ХЕНДЛЕР ДЛЯ ТЕСТА (ОБЯЗАТЕЛЬНО)
 @dp.message(Command("test_post"))
-async def test_post_handler(message: Message):
+async def cmd_test_post(message: Message):
     """Тестовая команда для проверки авто-постинга в канал."""
-    await message.answer("🚀 Запускаю тест авто-постинга...", parse_mode=ParseMode.HTML)
+    await message.reply("⏳ Запускаю тестовую отправку в канал...", parse_mode=ParseMode.HTML)
     await broadcast_daily_briefing()
-    await message.answer("✅ Тест завершен. Проверьте канал и логи.", parse_mode=ParseMode.HTML)
+    await message.reply("🏁 Тест завершен. Проверьте канал и логи.", parse_mode=ParseMode.HTML)
 
 # --- ЗАПУСК БОТА ---
 async def main():
     # Настраиваем планировщик:
+    
     # 1. Рассылка пользователям (каждый час)
     scheduler.add_job(check_and_send_briefings, 'cron', minute=0)
     
@@ -250,6 +255,7 @@ async def main():
     scheduler.add_job(broadcast_daily_briefing, 'cron', hour=7, minute=0)
     
     scheduler.start()
+    logging.info("📅 Планировщик запущен (07:00 UTC)")
     
     print("🤖 Бот запущен! Планировщик активен.")
     # Запуск поллинга (прослушивания сообщений)
