@@ -77,12 +77,26 @@ def get_sector(ticker):
 
 def clean_html(text):
     if not text: return ""
+    
+    # 1. Сначала экранируем спецсимволы, чтобы не сломать HTML-парсинг Telegram
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    # 2. Удаляем блоки кода (если есть), так как они не нужны в отчете
     text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
     text = text.replace("```", "").replace("markdown", "").replace("html", "")
+    
+    # 3. Преобразуем Markdown в HTML, поддерживаемый Telegram
+    # Жирный текст: **text** -> <b>text</b>
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+    
+    # Заголовки: # Text -> <b>Text</b> (обрабатываем от H3 до H1)
     text = re.sub(r"###\s*(.*)", r"<b>\1</b>", text)
     text = re.sub(r"##\s*(.*)", r"<b>\1</b>", text)
+    text = re.sub(r"^#\s+(.*)", r"<b>\1</b>", text, flags=re.MULTILINE)
+    
+    # Списки: * Item или - Item -> • Item
     text = text.replace("* ", "• ").replace("- ", "• ")
+    
     return text.strip()
 
 # --- 1. ФУНДАМЕНТАЛЬНЫЙ АУДИТ ---
@@ -143,7 +157,7 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
             ],
             temperature=0.3  # Делаем ответ более строгим и фактическим
         )
-        return completion.choices[0].message.content
+        return clean_html(completion.choices[0].message.content)
     except Exception as e:
         return f"⚠️ Ошибка AI анализа: {str(e)}"
 
