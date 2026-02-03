@@ -199,7 +199,15 @@ async def audit_handler(message: Message):
         await loading_msg.delete()
         await message.answer(text, parse_mode=ParseMode.HTML)
     except Exception as e:
-        await loading_msg.edit_text(f"⚠️ Ошибка анализа: {e}")
+        logging.error(f"Error in audit_handler: {e}")
+        error_text = f"⚠️ <b>Ошибка анализа:</b>\n{str(e)[:200]}" # Обрезаем, если ошибка длинная
+        
+        try:
+            # 1. Пробуем отредактировать сообщение "Загрузка..."
+            await loading_msg.edit_text(error_text, parse_mode=ParseMode.HTML)
+        except Exception:
+            # 2. Если сообщение удалено или устарело — отправляем НОВОЕ
+            await message.answer(error_text, parse_mode=ParseMode.HTML)
 
 @dp.message(Command("sniper"))
 async def sniper_handler(message: Message):
