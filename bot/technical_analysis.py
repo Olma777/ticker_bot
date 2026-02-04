@@ -15,7 +15,7 @@ class TechnicalAnalyzer:
         
     async def fetch_candles(self, symbol: str, timeframe: str, limit: int = 1000) -> pd.DataFrame:
         """
-        Fetches OHLCV data from Binance Futures.
+        Fetches OHLCV data from Binance Futures, fallback to Spot if failed.
         """
         try:
             # Check if symbol has /USDT suffix, add if missing
@@ -35,11 +35,43 @@ class TechnicalAnalyzer:
             
             return df
         except Exception as e:
-            print(f"Error fetching candles for {symbol}: {e}")
-            return pd.DataFrame()
+            print(f"Error fetching candles for {symbol} on Futures: {e}")
+            # Fallback to Spot
+            try:
+                print(f"Attempting Spot fallback for {symbol}...")
+                exchange_spot = ccxt.binance()
+                ohlcv = await exchange_spot.fetch_ohlcv(symbol, timeframe, limit=limit)
+                await exchange_spot.close()
+                
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                cols = ['open', 'high', 'low', 'close', 'volume']
+                df[cols] = df[cols].astype(float)
+                return df
+            except Exception as e2:
+                print(f"Error fetching candles for {symbol} on Spot: {e2}")
+                
+                # Extended Fallback: OKX or Bybit
+                try:
+                    print(f"Attempting OKX fallback for {symbol}...")
+                    exchange_okx = ccxt.okx()
+                    # OKX spot format is usually TICKER/USDT
+                    ohlcv = await exchange_okx.fetch_ohlcv(symbol, timeframe, limit=limit)
+                    await exchange_okx.close()
+                    
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    df.set_index('timestamp', inplace=True)
+                    cols = ['open', 'high', 'low', 'close', 'volume']
+                    df[cols] = df[cols].astype(float)
+                    return df
+                except Exception as e3:
+                     print(f"Error fetching candles for {symbol} on OKX: {e3}")
+                     return pd.DataFrame()
+
         finally:
             # We don't close self.exchange here because it might be reused. 
-            # Ideally we should close it when the instance is destroyed or explicitly.
             pass
 
     async def close(self):

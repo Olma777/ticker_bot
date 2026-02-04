@@ -226,6 +226,10 @@ async def get_sniper_analysis(ticker, lang="ru"):
             else:
                 trend = "SIDEWAYS"
                 phase = "CONSOLIDATION"
+        else:
+             # Если свечей нет (например, монета не торгуется на фьючерсах)
+             s1 = price * 0.95
+             r1 = price * 1.05
                 
     except Exception as e:
         print(f"Error getting technical levels: {e}")
@@ -233,6 +237,10 @@ async def get_sniper_analysis(ticker, lang="ru"):
         r1 = price * 1.05
     finally:
         await ta.close()
+
+    # Финальная проверка на нули (на всякий случай)
+    if s1 <= 0: s1 = price * 0.95
+    if r1 <= 0: r1 = price * 1.05
 
     system_prompt = f"""
     Ты — элитный крипто-аналитик, специализирующийся на **Фьючерсной Торговле (Perpetual Futures)**.
