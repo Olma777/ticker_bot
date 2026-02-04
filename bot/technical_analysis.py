@@ -6,14 +6,20 @@ from datetime import datetime
 
 class TechnicalAnalyzer:
     def __init__(self):
-        self.exchange = ccxt.binance()
+        # Используем Binance Futures (USDT-M) как основной источник данных
+        self.exchange = ccxt.binance({
+            'options': {
+                'defaultType': 'future'
+            }
+        })
         
     async def fetch_candles(self, symbol: str, timeframe: str, limit: int = 1000) -> pd.DataFrame:
         """
-        Fetches OHLCV data from Binance.
+        Fetches OHLCV data from Binance Futures.
         """
         try:
-            # Check if symbol has /USDT suffix, add if missing (assuming spot)
+            # Check if symbol has /USDT suffix, add if missing
+            # Для фьючерсов Binance тикеры обычно выглядят как BTC/USDT:USDT или просто BTC/USDT в CCXT
             if '/' not in symbol:
                 symbol = f"{symbol}/USDT"
                 
