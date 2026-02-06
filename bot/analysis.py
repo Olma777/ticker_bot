@@ -117,20 +117,65 @@ async def get_daily_briefing(user_input=None):
     except Exception as e:
         return f"⚠️ Ошибка Daily: {e}"
 
-# --- 2. AUDIT ---
+# --- 2. AUDIT (VC STYLE) ---
 async def analyze_token_fundamentals(ticker):
+    # 1. Получаем базовые данные для шапки (Цена, Объем)
+    price_data, _ = await get_crypto_price(ticker)
+    curr_price = price_data.get('price', 'N/A') if price_data else 'N/A'
+    vol = price_data.get('volume_24h', 'N/A') if price_data else 'N/A'
+    
     client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
-    prompt = f"Аудит {ticker}. Токеномика, Риски, Прогноз. Кратко (Markdown)."
+    
+    # 2. VC SUPER PROMPT (HTML Only)
+    prompt = f"""
+    Ты — старший аналитик венчурного фонда (VC Researcher).
+    Актив: {ticker.upper()} | Цена: ${curr_price} | Объем: {vol}
+    
+    ЗАДАЧА:
+    Проведи фундаментальный аудит проекта.
+    Ищи "Красные флаги" (риски) и "Зеленые флаги" (потенциал).
+    
+    ТРЕБОВАНИЯ К ФОРМАТУ:
+    1. ИСПОЛЬЗУЙ ТОЛЬКО HTML (`<b>`, `<i>`). ЗАПРЕЩЕНО Markdown (`**`, `##`).
+    2. Используй эмодзи для списков.
+    3. Стиль: Лаконичный, жесткий, без воды.
+    
+    СТРУКТУРА ОТВЕТА (HTML):
+    
+    🛡 <b>{ticker.upper()} | Fundamental Audit</b>
+    💰 Цена: ${curr_price}
+    
+    1️⃣ <b>Продукт и Утилити</b>
+    ▪️ Суть: [Что они делают? 1 предложение]
+    ▪️ Проблема: [Какую боль решают?]
+    ▪️ Конкуренты: [Кто дышит в спину?]
+    
+    2️⃣ <b>Токеномика (On-Chain)</b>
+    ▪️ Эмиссия: [Ограничена или бесконечна?]
+    ▪️ Разлоки/Давление: [Есть ли риск дампа от фондов?]
+    ▪️ Утилити токена: [Зачем он нужен? Газ/Говернанс?]
+    
+    3️⃣ <b>Риски и Угрозы (Red Flags)</b>
+    🚩 [Риск 1]
+    🚩 [Риск 2]
+    
+    4️⃣ <b>Вердикт VC</b>
+    🏆 <b>Оценка: [1-10]/10</b>
+    ▪️ Вывод: [Инвестировать / Наблюдать / Скам]
+    
+    ⚖️ <b>Market Lens Disclaimer:</b> Не финансовый совет.
+    """
+
     try:
         async with rate_limiter:
             completion = await client.chat.completions.create(
                 model=os.getenv("MODEL_NAME", "deepseek/deepseek-chat"),
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.0
+                temperature=0.1
             )
         return completion.choices[0].message.content
     except Exception as e:
-        return f"Error: {e}"
+        return f"⚠️ Ошибка аудита: {e}"
 
 # --- 3. SNIPER (FINAL VERSION) ---
 async def get_sniper_analysis(ticker, language="ru"):
