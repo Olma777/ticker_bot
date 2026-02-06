@@ -261,19 +261,15 @@ async def cmd_sniper(message: Message):
 
 @dp.message(Command("daily"))
 async def daily_manual_handler(message: Message):
-    """Ручной вызов брифинга."""
-    # Если пользователь вызвал вручную, тоже подписываем его (если не был подписан)
-    if message.from_user.id not in USER_SETTINGS:
-         USER_SETTINGS[message.from_user.id] = 9
-
-    loading_msg = await message.answer("☕️ <b>Готовлю свежий брифинг...</b>", parse_mode=ParseMode.HTML)
+    """Ручной запрос дневного обзора."""
+    loading = await message.answer("☕️ Сканирую сектора рынка...")
     try:
-        # market_data теперь получается внутри функции, если не передан
-        text = await get_daily_briefing()
-        await loading_msg.delete()
-        await message.answer(text, parse_mode=ParseMode.HTML)
+        report = await get_daily_briefing()
+        await loading.delete()
+        # ВАЖНО: HTML режим включен
+        await message.answer(report, parse_mode="HTML")
     except Exception as e:
-        await loading_msg.edit_text(f"⚠️ Не удалось собрать данные: {e}")
+        await message.answer(f"⚠️ Ошибка: {e}")
 
 # 3. ХЕНДЛЕР ДЛЯ ТЕСТА (ОБЯЗАТЕЛЬНО)
 @dp.message(Command("test_post"))
