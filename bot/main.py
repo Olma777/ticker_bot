@@ -255,7 +255,15 @@ async def sniper_handler(message: Message):
         await loading_msg.delete()
         await message.answer(text, parse_mode=ParseMode.HTML)
     except Exception as e:
-        await loading_msg.edit_text(f"⚠️ Ошибка анализа: {e}")
+        logging.error(f"Error in sniper_handler: {e}", exc_info=True)
+        error_text = "⚠️ <b>Ошибка анализа.</b>\nПопробуйте позже или выберите другой тикер."
+        
+        try:
+            # Пробуем отредактировать сообщение "Загрузка..."
+            await loading_msg.edit_text(error_text, parse_mode=ParseMode.HTML)
+        except Exception:
+            # Если сообщение удалено или устарело — отправляем НОВОЕ
+            await message.answer(error_text, parse_mode=ParseMode.HTML)
 
 @dp.message(Command("daily"))
 async def daily_manual_handler(message: Message):
