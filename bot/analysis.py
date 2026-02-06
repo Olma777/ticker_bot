@@ -5,6 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from bot.technical_analysis import TechnicalAnalyzer
+from aiolimiter import AsyncLimiter
 
 load_dotenv()
 
@@ -15,6 +16,10 @@ client = AsyncOpenAI(
 )
 
 MODEL_NAME = "deepseek/deepseek-chat"
+
+# --- RATE LIMITER ---
+# OpenRouter Free tier: 10 req/min, используем 80% лимита для безопасности
+openrouter_limiter = AsyncLimiter(8, 60)
 
 # --- КЭШИРОВАНИЕ ---
 ANALYSIS_CACHE = {}
@@ -155,7 +160,7 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
                 {"role": "system", "content": "Ты профессиональный крипто-аналитик. Ты пишешь структурированные, сухие, насыщенные фактами отчеты."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3  # Делаем ответ более строгим и фактическим
+            temperature=0.0  # Максимальная детерминированность, нет галлюцинаций
         )
         return clean_html(completion.choices[0].message.content)
     except Exception as e:
@@ -310,9 +315,10 @@ async def get_sniper_analysis(ticker, lang="ru"):
     """
 
     try:
-        response = await client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
+        async with openrouter_limiter:
+            response = await client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
                 {
                     "role": "system",
                     "content": (
@@ -323,15 +329,15 @@ async def get_sniper_analysis(ticker, lang="ru"):
                         "If Algorithmic Pivot Zones are provided, prioritize them."
                     )
                 },
-                {"role": "user", "content": system_prompt}
-            ],
-            temperature=0.15,
-            extra_headers={
-                "HTTP-Referer": "https://telegram.org",
-                "X-Title": "CryptoBot"
-            }
-        )
-        result = clean_html(response.choices[0].message.content)
+                    {"role": "user", "content": system_prompt}
+                ],
+                temperature=0.0,  # Максимальная точность
+                extra_headers={
+                    "HTTP-Referer": "https://telegram.org",
+                    "X-Title": "CryptoBot"
+                }
+            )
+            result = clean_html(response.choices[0].message.content)
         ANALYSIS_CACHE[cache_key] = (time.time(), result)
         return result
     except Exception as e:
@@ -408,16 +414,17 @@ async def get_daily_briefing(market_data=None):
     """
 
         try:
-            response = await client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": "You are a crypto analyst. Output in Markdown."},
-                    {"role": "user", "content": system_prompt}
-                ],
-                temperature=0.2,
-                extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
-            )
-            result = clean_html(response.choices[0].message.content)
+            async with openrouter_limiter:
+                response = await client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": "You are a crypto analyst. Output in Markdown."},
+                        {"role": "user", "content": system_prompt}
+                    ],
+                    temperature=0.0,  # Максимальная точность
+                    extra_headers={"HTTP-Referer": "https://telegram.org", "X-Title": "CryptoBot"}
+                )
+                result = clean_html(response.choices[0].message.content)
             
             if not result:
                  return "⚠️ Не удалось получить ответ от нейросети. Попробуйте еще раз через минуту."

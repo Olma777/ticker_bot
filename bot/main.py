@@ -43,6 +43,22 @@ USER_SETTINGS = {}
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
+def validate_ticker(ticker: str) -> tuple[bool, str]:
+    """Валидация тикера для защиты от injection и некорректных входных данных."""
+    import re
+    
+    if not ticker or len(ticker) < 2:
+        return False, "❌ Тикер слишком короткий. Минимум 2 символа."
+    
+    if len(ticker) > 10:
+        return False, "❌ Тикер слишком длинный. Максимум 10 символов."
+    
+    # Только буквы и цифры
+    if not re.match(r'^[A-Z0-9]+$', ticker):
+        return False, "❌ Неверный формат тикера. Используйте только заглавные буквы и цифры."
+    
+    return True, ""
+
 def get_time_keyboard():
     """Создает клавиатуру для выбора времени рассылки."""
     buttons = []
@@ -185,7 +201,14 @@ async def audit_handler(message: Message):
         await message.answer("⚠️ Введите тикер.\nПример: <code>/audit SOL</code>", parse_mode=ParseMode.HTML)
         return
     
-    ticker = args[1].upper()
+    ticker = args[1].upper().strip()
+    
+    # Валидация тикера
+    is_valid, error_msg = validate_ticker(ticker)
+    if not is_valid:
+        await message.answer(error_msg, parse_mode=ParseMode.HTML)
+        return
+    
     loading_msg = await message.answer(f"🛡 <b>Изучаю проект {ticker}...</b>", parse_mode=ParseMode.HTML)
     
     try:
@@ -216,7 +239,14 @@ async def sniper_handler(message: Message):
         await message.answer("⚠️ Введите тикер.\nПример: <code>/sniper BTC</code>", parse_mode=ParseMode.HTML)
         return
     
-    ticker = args[1].upper()
+    ticker = args[1].upper().strip()
+    
+    # Валидация тикера
+    is_valid, error_msg = validate_ticker(ticker)
+    if not is_valid:
+        await message.answer(error_msg, parse_mode=ParseMode.HTML)
+        return
+    
     loading_msg = await message.answer(f"🦅 <b>Рассчитываю сетап по {ticker}...</b>", parse_mode=ParseMode.HTML)
     
     try:
