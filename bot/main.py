@@ -232,38 +232,32 @@ async def audit_handler(message: Message):
             await message.answer(error_text, parse_mode=ParseMode.HTML)
 
 @dp.message(Command("sniper"))
-async def sniper_handler(message: Message):
-    """Технический анализ и поиск точки входа."""
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("⚠️ Введите тикер.\nПример: <code>/sniper BTC</code>", parse_mode=ParseMode.HTML)
+async def cmd_sniper(message: Message):
+    """Снайпер-анализ (Smart Money)."""
+    # Эмуляция message.get_args()
+    args_list = message.text.split()
+    args = args_list[1] if len(args_list) > 1 else None
+
+    if not args:
+        await message.answer("⚠️ Используйте: /sniper [TICKER]\nПример: /sniper LTC")
         return
     
-    ticker = args[1].upper().strip()
-    
-    # Валидация тикера
-    is_valid, error_msg = validate_ticker(ticker)
-    if not is_valid:
-        await message.answer(error_msg, parse_mode=ParseMode.HTML)
-        return
-    
-    loading_msg = await message.answer(f"🦅 <b>Рассчитываю сетап по {ticker}...</b>", parse_mode=ParseMode.HTML)
+    # Отправляем сообщение о начале работы
+    loading_msg = await message.answer(f"🔭 Снайпер-модуль сканирует {args.upper()}...")
     
     try:
-        # Вся логика получения цены и анализа теперь внутри get_sniper_analysis
-        text = await get_sniper_analysis(ticker, "ru")
-        await loading_msg.delete()
-        await message.answer(text, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logging.error(f"Error in sniper_handler: {e}", exc_info=True)
-        error_text = "⚠️ <b>Ошибка анализа.</b>\nПопробуйте позже или выберите другой тикер."
+        # Вызываем функцию (теперь она возвращает HTML)
+        report = await get_sniper_analysis(args.upper(), "ru")
         
-        try:
-            # Пробуем отредактировать сообщение "Загрузка..."
-            await loading_msg.edit_text(error_text, parse_mode=ParseMode.HTML)
-        except Exception:
-            # Если сообщение удалено или устарело — отправляем НОВОЕ
-            await message.answer(error_text, parse_mode=ParseMode.HTML)
+        # Удаляем сообщение о загрузке
+        await loading_msg.delete()
+        
+        # Отправляем отчет в HTML
+        await message.answer(report, parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        logging.error(f"Error in cmd_sniper: {e}", exc_info=True)
+        await message.answer(f"⚠️ Ошибка: {e}")
 
 @dp.message(Command("daily"))
 async def daily_manual_handler(message: Message):
