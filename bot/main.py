@@ -305,6 +305,17 @@ async def main():
     scheduler.start()
     logging.info("📅 Планировщик запущен (07:00 UTC)")
     
+    # Устанавливаем команды в меню Telegram
+    await bot.set_my_commands([
+        types.BotCommand(command="start", description="🦁 Главное меню"),
+        types.BotCommand(command="scan", description="🔭 Скринер (Скрытая аккумуляция)"),
+        types.BotCommand(command="sniper", description="🎯 Точка входа (Smart Money)"),
+        types.BotCommand(command="daily", description="☀️ Ежедневный брифинг"),
+        types.BotCommand(command="audit", description="🛡 VC-Аудит токена"),
+        types.BotCommand(command="help", description="ℹ️ Помощь и Инструкция")
+    ])
+    logging.info("📋 Меню команд обновлено")
+    
     print("🤖 Бот запущен! Планировщик активен.")
     # Запуск поллинга (прослушивания сообщений)
     await dp.start_polling(bot)
