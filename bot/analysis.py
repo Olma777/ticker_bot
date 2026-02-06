@@ -169,18 +169,34 @@ async def get_crypto_analysis(ticker, full_name, lang="ru"):
 from bot.prices import get_market_summary, get_crypto_price
 
 # --- 2. СНАЙПЕР (SMART MONEY / SMC) — УЛУЧШЕННАЯ ВЕРСИЯ ---
-async def get_sniper_analysis(ticker):
+async def get_sniper_analysis(ticker, language="ru"):
+    """Снайперский анализ с техническими уровнями и SMC логикой."""
     # 1. Получаем данные (Futures Only)
     price_data, error = await get_crypto_price(ticker)
     
     if not price_data:
         return f"⚠️ Не удалось получить данные по {ticker}. Возможно, тикер не торгуется на фьючерсах."
 
-    # Формируем контекст для AI
+    # 2. Получаем 24h статистику с Binance Futures
     curr_price = price_data['price']
-    change = price_data['change_24h']
-    vol = price_data['volume_24h']
-    source = price_data['source']
+    ticker_upper = ticker.upper().replace("USDT", "").replace("USD", "")
+    
+    change = "N/A"
+    vol = "N/A"
+    source = "Binance Futures"
+    
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={ticker_upper}USDT"
+            async with session.get(url, timeout=3) as resp:
+                if resp.status == 200:
+                    stats = await resp.json()
+                    change = f"{float(stats.get('priceChangePercent', 0)):.2f}"
+                    vol_raw = float(stats.get('quoteVolume', 0))
+                    vol = f"${vol_raw/1_000_000:.1f}M" if vol_raw > 1_000_000 else f"${vol_raw/1_000:.1f}K"
+    except Exception as e:
+        print(f"Failed to fetch 24h stats for {ticker}: {e}")
     
     # 2. СУПЕР-ПРОМТ
     prompt = f"""
@@ -254,7 +270,7 @@ async def get_sniper_analysis(ticker):
                     {"role": "system", "content": "Ты профессиональный крипто-аналитик. Ты пишешь на русском языке. Ты используешь терминологию SMC (Smart Money Concepts)."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1 # Низкая температура для четкости уровней
+                temperature=0.0  # Максимальная детерминированность для технических уровней
             )
         return completion.choices[0].message.content
     except Exception as e:
