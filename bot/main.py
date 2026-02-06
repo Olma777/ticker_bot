@@ -16,7 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 # Импорт наших модулей
 # Убедитесь, что запускаете бота из корня проекта: python3 -m bot.main
 from bot.prices import get_crypto_price, get_market_summary
-from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing
+from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan
 
 # 1. НАСТРОЙКИ
 # Загрузка переменных окружения
@@ -270,6 +270,18 @@ async def daily_manual_handler(message: Message):
         await message.answer(report, parse_mode="HTML")
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {e}")
+
+@dp.message(Command("scan"))
+async def cmd_scan(message: Message):
+    """Скринер рынка - поиск скрытой аккумуляции."""
+    loading = await message.answer("🔭 Сканирую рынок на предмет скрытой аккумуляции...")
+    try:
+        report = await get_market_scan()
+        await loading.delete()
+        await message.answer(report, parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка: {e}")
+
 
 # 3. ХЕНДЛЕР ДЛЯ ТЕСТА (ОБЯЗАТЕЛЬНО)
 @dp.message(Command("test_post"))
