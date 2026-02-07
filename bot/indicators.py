@@ -1,99 +1,116 @@
 import ccxt.async_support as ccxt
-import asyncio
+import pandas as pd
+import numpy as np
+import logging
 
-async def fetch_candles(ticker):
-    """
-    Скачивает 50 свечей 1h через CCXT (Binance Futures или fallback на Bybit).
-    Возвращает список свечей: [[timestamp, open, high, low, close, volume], ...]
-    """
-    ticker_upper = ticker.upper().replace("USDT", "").replace("USD", "")
-    symbol = f"{ticker_upper}/USDT"
-    
-    exchanges = [
-        ccxt.binance({'options': {'defaultType': 'future'}}),
-        ccxt.bybit({'options': {'defaultType': 'linear'}})
-    ]
-    
-    for exchange in exchanges:
-        try:
-            # fetch_ohlcv(symbol, timeframe, since, limit)
-            candles = await exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
-            if candles and len(candles) >= 50:
-                return candles  # finally block will handle close
-        except Exception as e:
-            print(f"Error fetching candles from {exchange.id}: {e}")
-            continue
-        finally:
-            await exchange.close()
-            
-    return []
+logger = logging.getLogger(__name__)
 
-def calculate_rsi(prices, period=14):
-    """
-    Считает RSI (14) на чистом Python.
-    prices: список цен закрытия (от старых к новым).
-    """
-    if len(prices) < period + 1:
-        return 50.0 # Недостаточно данных
+async def fetch_candles(ticker, timeframe='1h', limit=200):
+    """Скачивает свечи (OHLCV)"""
+    exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
+    try:
+        symbol = f"{ticker.upper()}/USDT"
+        ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+        return df
+    except Exception as e:
+        logger.error(f"Error fetching candles for {ticker}: {e}")
+        return None
+    finally:
+        await exchange.close()
+
+def calculate_atr(df, period=14):
+    df['tr'] = np.maximum(df['high'] - df['low'], 
+                          np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                                     abs(df['low'] - df['close'].shift(1))))
+    return df['tr'].rolling(window=period).mean()
+
+def find_pivots(df, left=4, right=4):
+    """Поиск локальных High/Low (аналог ta.pivothigh/low)"""
+    df['isPivotHigh'] = df['high'].rolling(window=left+right+1, center=True).max() == df['high']
+    df['isPivotLow'] = df['low'].rolling(window=left+right+1, center=True).min() == df['low']
+    return df
+
+def calculate_market_regime(df):
+    """Эмуляция логики Regime (Expansion/Compression) на основе полос Боллинджера и ATR"""
+    # Если волатильность падает (Squeeze) -> COMPRESSION
+    # Если волатильность растет -> EXPANSION
     
-    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-    gains = [d if d > 0 else 0 for d in deltas]
-    losses = [-d if d < 0 else 0 for d in deltas]
+    df['std'] = df['close'].rolling(window=20).std()
+    df['upper'] = df['close'].rolling(window=20).mean() + (df['std'] * 2)
+    df['lower'] = df['close'].rolling(window=20).mean() - (df['std'] * 2)
+    df['bandwidth'] = (df['upper'] - df['lower']) / df['close'].rolling(window=20).mean()
     
-    # Первая средняя (SMA)
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
+    # Сравниваем текущую ширину канала с средней за 50 свечей
+    avg_bandwidth = df['bandwidth'].rolling(window=50).mean().iloc[-1]
+    curr_bandwidth = df['bandwidth'].iloc[-1]
     
-    if avg_loss == 0:
-        return 100.0
+    # Safety check for NaN (insufficient data)
+    if pd.isna(avg_bandwidth) or pd.isna(curr_bandwidth):
+        return "NEUTRAL"
     
-    # Wilder's Smoothing
-    for i in range(period, len(deltas)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-        
-    if avg_loss == 0:
-        return 100.0
-        
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi, 2)
+    if curr_bandwidth < avg_bandwidth * 0.8:
+        return "COMPRESSION"
+    elif curr_bandwidth > avg_bandwidth * 1.2:
+        return "EXPANSION"
+    else:
+        return "NEUTRAL"
 
 async def get_technical_indicators(ticker):
-    """
-    Возвращает словарь с индикаторами: RSI, Trend, Support, Resistance.
-    """
-    candles = await fetch_candles(ticker)
+    df = await fetch_candles(ticker, limit=100)
+    if df is None or df.empty: return None
+
+    # 1. Данные
+    current_price = df['close'].iloc[-1]
+    df['atr'] = calculate_atr(df)
     
-    if not candles:
-        return None
-        
-    # Распаковка данных (OHLCV)
-    # [timestamp, open, high, low, close, volume]
-    highs = [c[2] for c in candles]
-    lows = [c[3] for c in candles]
-    closes = [c[4] for c in candles]
+    # 2. Pivot Points & Levels (Trend Level PRO Logic)
+    df = find_pivots(df)
     
-    # 1. RSI (14)
-    rsi = calculate_rsi(closes)
+    supports = []
+    resistances = []
     
-    # 2. Support & Resistance (Low/High за 50 часов)
-    support = min(lows)
-    resistance = max(highs)
+    # Собираем пивоты за последние 50 свечей
+    recent_df = df.iloc[-50:]
     
-    # 3. Trend (SMA 20)
-    # Берем последние 20 цен
-    if len(closes) >= 20:
-        sma20 = sum(closes[-20:]) / 20
-        current_price = closes[-1]
-        trend = "BULLISH" if current_price > sma20 else "BEARISH"
-    else:
-        trend = "NEUTRAL"
-        
+    for i, row in recent_df.iterrows():
+        if row['isPivotHigh']:
+            resistances.append(row['high'])
+        if row['isPivotLow']:
+            supports.append(row['low'])
+            
+    # Фильтрация и поиск ближайших (Top-3)
+    supports.sort() # От меньшего к большему
+    resistances.sort()
+    
+    # Ищем ближайшие к текущей цене
+    s1 = max([s for s in supports if s < current_price], default=df['low'].min())
+    r1 = min([r for r in resistances if r > current_price], default=df['high'].max())
+    
+    # RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs)).iloc[-1]
+    
+    # Trend (SMA 50)
+    sma_50 = df['close'].rolling(window=50).mean().iloc[-1]
+    trend = "BULLISH" if current_price > sma_50 else "BEARISH"
+    
+    # Regime
+    regime = calculate_market_regime(df)
+    
+    # Safety Score
+    is_safe = "SAFE" if regime != "COMPRESSION" else "RISKY"
+
     return {
-        "rsi": rsi,
+        "price": current_price,
+        "rsi": round(rsi, 1),
         "trend": trend,
-        "support": support,
-        "resistance": resistance,
-        "current_price": closes[-1]
+        "regime": regime,
+        "safety": is_safe,
+        "s1": round(s1, 4),
+        "r1": round(r1, 4),
+        "atr": round(df['atr'].iloc[-1], 4)
     }
