@@ -104,12 +104,19 @@ async def get_technical_indicators(ticker):
     # Safety Score
     is_safe = "SAFE" if regime != "COMPRESSION" else "RISKY"
 
+    # Pivot Point (Classic: (H + L + C) / 3 of previous candle)
+    prev_high = df['high'].iloc[-2]
+    prev_low = df['low'].iloc[-2]
+    prev_close = df['close'].iloc[-2]
+    pivot = (prev_high + prev_low + prev_close) / 3
+
     return {
         "price": current_price,
         "rsi": round(rsi, 1),
         "trend": trend,
         "regime": regime,
         "safety": is_safe,
+        "pivot": round(pivot, 4),
         "s1": round(s1, 4),
         "r1": round(r1, 4),
         "atr": round(df['atr'].iloc[-1], 4)
