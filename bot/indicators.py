@@ -79,6 +79,41 @@ def calculate_global_regime(btc_df):
     safety = "RISKY" if regime == "COMPRESSION" else "SAFE"
     return regime, safety
 
+def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1_price, r1_price):
+    """
+    Рассчитывает вероятность сделки (0-100%).
+    Пороги синхронизированы: RSI 65/35.
+    """
+    score = 50 # База
+    
+    # 1. Regime Modifier
+    if regime == "EXPANSION": score += 10
+    elif regime in ["COMPRESSION", "NEUTRAL"]: score -= 10
+    
+    # 2. Определяем цель (Support или Resistance)
+    dist_s1 = abs(current_price - s1_price)
+    dist_r1 = abs(current_price - r1_price)
+    
+    if dist_s1 < dist_r1:
+        target_score = s1_score
+        is_support_target = True # Мы у поддержки -> хотим ЛОНГ
+    else:
+        target_score = r1_score
+        is_support_target = False # Мы у сопротивления -> хотим ШОРТ
+        
+    # 3. Level Strength Modifier
+    if target_score >= 3.0: score += 15   # Strong
+    elif target_score < 1.0: score -= 20  # Weak
+    # Medium (1.0-2.9) = 0
+    
+    # 4. RSI Modifier (Бонус за идеальный вход)
+    # Если RSI < 35 у Поддержки -> Отличный вход (+5)
+    if is_support_target and rsi < 35: score += 5
+    # Если RSI > 65 у Сопротивления -> Отличный вход (+5)
+    if not is_support_target and rsi > 65: score += 5
+    
+    return max(0, min(100, int(score)))
+
 def process_levels(df):
     levels = []
     pending = []

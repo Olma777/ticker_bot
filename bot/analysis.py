@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from openai import AsyncOpenAI
 from aiolimiter import AsyncLimiter
 from bot.prices import get_crypto_price, get_market_summary
-from bot.indicators import get_technical_indicators
+from bot.indicators import get_technical_indicators, calculate_p_score
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +214,24 @@ async def get_sniper_analysis(ticker, language="ru"):
     source = price_data.get('source', 'Unknown')
     change = price_data.get('change_24h', 'N/A')
     
-    # ФИНАЛЬНЫЙ ПРОМТ (GOLD MASTER)
+    # Рассчитываем P-Score через Python
+    rsi_val = float(indicators['rsi']) if indicators['rsi'] != 'N/A' else 50
+    p_score = calculate_p_score(
+        regime=indicators['regime'],
+        rsi=rsi_val,
+        s1_score=indicators['s1_score'],
+        r1_score=indicators['r1_score'],
+        current_price=float(curr_price) if curr_price != 'N/A' else 0,
+        s1_price=float(indicators['s1']) if indicators['s1'] != 'N/A' else 0,
+        r1_price=float(indicators['r1']) if indicators['r1'] != 'N/A' else 0
+    )
+    
+    # Warning для слабых уровней
+    warning_html = ""
+    if indicators['s1_score'] < 1.0 or indicators['r1_score'] < 1.0:
+        warning_html = "⚠️ <b>ВНИМАНИЕ:</b> Ближайший уровень слабый (Score ниже 1.0). Требует подтверждения!"
+    
+    # ФИНАЛЬНЫЙ ПРОМТ (GOLD MASTER v2)
     prompt = f"""
     Ты — профессиональный аналитик Liquidity Hunter (Smart Money).
     ТАЙМФРЕЙМ: 30 минут (Intraday).
@@ -223,26 +240,24 @@ async def get_sniper_analysis(ticker, language="ru"):
     • Актив: {ticker.upper()} | Цена: ${curr_price}
     • RSI (14): {indicators['rsi']} | Тренд: {indicators['trend']}
     • Режим: {indicators['regime']} | Безопасность: {indicators['safety']}
+    • P-SCORE (Алгоритмический): {p_score}%
     
-    ВСЕ ВИДИМЫЕ УРОВНИ:
+    ВСЕ ВИДИМЫЕ УРОВНИ (ОТСОРТИРОВАНЫ ПО БЛИЗОСТИ):
     • Поддержки (SUP): {indicators['supports_list']}
     • Сопротивления (RES): {indicators['resistances_list']}
 
-    ТЕХНИЧЕСКИЕ ПРАВИЛА (ВАЖНО!):
-    1. 🛑 НИКОГДА НЕ ИСПОЛЬЗУЙ Markdown (###, **). Используй ТОЛЬКО HTML (b, i, code).
-    2. 🛑 НИКОГДА НЕ ИСПОЛЬЗУЙ символы '<' или '>' в тексте (это ломает Telegram). Пиши "ниже", "выше".
-    3. Обоснование пиши в стиле HTML: <b>Обоснование:</b>, а не ###.
+    ⚙️ ЛОГИКА ПРИНЯТИЯ РЕШЕНИЙ:
+    1. 💪 СИЛА УРОВНЯ (SCORE):
+       • Score ≥ 3.0: 🟢 STRONG.
+       • Score 1.0 - 2.9: 🟡 MEDIUM.
+       • Score ниже 1.0: 🔴 WEAK.
+    2. 🛑 RSI ФИЛЬТР (65/35):
+       • RSI выше 65 + RES = Только Short.
+       • RSI ниже 35 + SUP = Только Long.
+    3. 📐 ДИСТАНЦИЯ:
+       • Вход строго в пределах 3-4% от текущей цены.
 
-    СТРАТЕГИЯ:
-    1. 🎯 ДИСТАНЦИЯ: Точка входа строго в пределах 3-4% от текущей цены.
-    2. 💪 СИЛА УРОВНЯ (Score):
-       - Score ниже -20.0: Очень слабый/исторический уровень. Не используй для входа, только как ориентир.
-       - Score выше 3.0: Сильный уровень.
-    3. 🛑 RSI ЗАПРЕТ:
-       - RSI выше 65 + RES = Только Short.
-       - RSI ниже 35 + SUP = Только Long.
-
-    АНАЛИЗИРУЙ ПО ЭТОЙ СТРУКТУРЕ:
+    АНАЛИЗИРУЙ ПО ЭТОЙ СТРУКТУРЕ (ТОЛЬКО HTML):
 
     📊 <b>{ticker.upper()} | Liquidity Hunter (M30)</b>
     💰 Цена: <code>${curr_price}</code> ({change}%)
@@ -252,35 +267,37 @@ async def get_sniper_analysis(ticker, language="ru"):
     • <b>RES:</b> {indicators['resistances_list']}
 
     📡 <b>MARKET CONTEXT:</b>
-    • RSI: <b>{indicators['rsi']}</b> ({'ПЕРЕКУПЛЕН!' if indicators['rsi'] != 'N/A' and float(indicators['rsi']) > 65 else 'ПЕРЕПРОДАН!' if indicators['rsi'] != 'N/A' and float(indicators['rsi']) < 35 else 'Нейтрально'})
+    • RSI: <b>{indicators['rsi']}</b> ({'🔥 ПЕРЕКУПЛЕН!' if rsi_val > 65 else '❄️ ПЕРЕПРОДАН!' if rsi_val < 35 else 'Нейтрально'})
     • Режим: <b>{indicators['regime']}</b>
 
     1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
-    ▪️ <b>Фаза:</b> [Накопление/Распределение?]
-    ▪️ <b>Анализ:</b> [Опиши ситуацию. Есть ли сильные уровни рядом?]
+    ▪️ <b>Фаза:</b> [Накопление/Распределение/Тренд]
+    ▪️ <b>Анализ:</b> [Оцени силу уровня и RSI]
 
-    2️⃣ <b>P-SCORE</b>
-    ▪️ <b>P-Score:</b> <b>[РАССЧИТАЙ]%</b>
+    2️⃣ <b>P-SCORE (ВЕРОЯТНОСТЬ)</b>
+    ▪️ <b>P-Score:</b> <b>{p_score}%</b>
        • База: 50%
-       • Режим: +20% (EXPANSION) / -10% (COMPRESSION) / ±0% (NEUTRAL)
-       • Уровень: +15% (Score выше 3) / -20% (Score ниже 1)
-       • RSI: -15% (если против тренда)
+       • Режим: +10% (EXPANSION) / -10% (COMPRESSION/NEUTRAL)
+       • Уровень: +15% (Strong) / -20% (Weak)
+       • RSI: +5% (если RSI ниже 35 у SUP или выше 65 у RES)
 
     🎯 <b>СНАЙПЕРСКИЙ ПЛАН</b>
     🚦 <b>Тип:</b> [LONG/SHORT] (Limit)
-    🚪 <b>Вход:</b> <code>[Цена]</code> (Рядом с уровнем! Макс. 3-4% от цены)
+    🚪 <b>Вход:</b> <code>[Цена]</code> (Строго у уровня!)
 
     🛡 <b>Стоп-лосс:</b>
-       🔴 <code>[Цена]</code> (За зоной ликвидности)
+       🔴 <code>[Цена]</code> (За зоной)
 
     ✅ <b>Тейк-профиты:</b>
        🟢 TP1: <code>[Цена]</code>
        🟢 TP2: <code>[Цена]</code>
        
-    <b>Обоснование:</b>
-    1. <b>Запреты:</b> [Сработал ли RSI фильтр?]
-    2. <b>Дистанция:</b> [Вход рядом с уровнем?]
-    3. <b>Риск:</b> 1% на сделку.
+    <b>ОБОСНОВАНИЕ:</b>
+    1. <b>Фильтр:</b> [Сработал ли RSI?]
+    2. <b>Сила уровня:</b> [Weak/Medium/Strong?]
+    3. <b>Риск:</b> 1%.
+    
+    {warning_html}
     """
 
     client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
