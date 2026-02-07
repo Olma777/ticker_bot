@@ -209,6 +209,16 @@ async def get_technical_indicators(ticker):
         s1_score = supports[0]['score'] if supports else 0.0
         r1_score = resistances[0]['score'] if resistances else 0.0
 
+        # Format lists sorted by distance from price (closest first)
+        def format_levels(levels_list, current_p):
+            if not levels_list:
+                return "Нет уровней"
+            sorted_by_dist = sorted(levels_list, key=lambda x: abs(x['price'] - current_p))
+            return ", ".join([f"${round(l['price'], 4)} (Score: {round(l['score'], 1)})" for l in sorted_by_dist])
+        
+        supports_list = format_levels(supports, current_price)
+        resistances_list = format_levels(resistances, current_price)
+
         # RSI
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -228,7 +238,9 @@ async def get_technical_indicators(ticker):
             "s1": round(s1, 4),
             "r1": round(r1, 4),
             "s1_score": round(s1_score, 1),
-            "r1_score": round(r1_score, 1)
+            "r1_score": round(r1_score, 1),
+            "supports_list": supports_list,
+            "resistances_list": resistances_list
         }
     finally:
         await exchange.close()
