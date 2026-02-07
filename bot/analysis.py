@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from openai import AsyncOpenAI
 from aiolimiter import AsyncLimiter
 from bot.prices import get_crypto_price, get_market_summary
-from bot.indicators import get_technical_indicators, calculate_p_score
+from bot.indicators import get_technical_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -214,24 +214,13 @@ async def get_sniper_analysis(ticker, language="ru"):
     source = price_data.get('source', 'Unknown')
     change = price_data.get('change_24h', 'N/A')
     
-    # Рассчитываем P-Score через Python
-    rsi_val = float(indicators['rsi']) if indicators['rsi'] != 'N/A' else 50
-    p_score = calculate_p_score(
-        regime=indicators['regime'],
-        rsi=rsi_val,
-        s1_score=indicators['s1_score'],
-        r1_score=indicators['r1_score'],
-        current_price=float(curr_price) if curr_price != 'N/A' else 0,
-        s1_price=float(indicators['s1']) if indicators['s1'] != 'N/A' else 0,
-        r1_price=float(indicators['r1']) if indicators['r1'] != 'N/A' else 0
-    )
+    p_score = indicators['p_score']
+    p_score_details = indicators['p_score_details']
     
-    # Warning для слабых уровней
-    warning_html = ""
-    if indicators['s1_score'] < 1.0 or indicators['r1_score'] < 1.0:
-        warning_html = "⚠️ <b>ВНИМАНИЕ:</b> Ближайший уровень слабый (Score ниже 1.0). Требует подтверждения!"
-    
-    # ФИНАЛЬНЫЙ ПРОМТ (GOLD MASTER v2)
+    # Логика предупреждения
+    warning_html = "⚠️ <b>ВНИМАНИЕ:</b> Низкий P-Score! Жди подтверждения объемом." if p_score < 50 else ""
+
+    # ФИНАЛЬНЫЙ ПРОМТ (GOLD MASTER v3)
     prompt = f"""
     Ты — профессиональный аналитик Liquidity Hunter (Smart Money).
     ТАЙМФРЕЙМ: 30 минут (Intraday).
@@ -240,22 +229,11 @@ async def get_sniper_analysis(ticker, language="ru"):
     • Актив: {ticker.upper()} | Цена: ${curr_price}
     • RSI (14): {indicators['rsi']} | Тренд: {indicators['trend']}
     • Режим: {indicators['regime']} | Безопасность: {indicators['safety']}
-    • P-SCORE (Алгоритмический): {p_score}%
+    • P-SCORE: {p_score}%
     
-    ВСЕ ВИДИМЫЕ УРОВНИ (ОТСОРТИРОВАНЫ ПО БЛИЗОСТИ):
+    ВСЕ ВИДИМЫЕ УРОВНИ:
     • Поддержки (SUP): {indicators['supports_list']}
     • Сопротивления (RES): {indicators['resistances_list']}
-
-    ⚙️ ЛОГИКА ПРИНЯТИЯ РЕШЕНИЙ:
-    1. 💪 СИЛА УРОВНЯ (SCORE):
-       • Score ≥ 3.0: 🟢 STRONG.
-       • Score 1.0 - 2.9: 🟡 MEDIUM.
-       • Score ниже 1.0: 🔴 WEAK.
-    2. 🛑 RSI ФИЛЬТР (65/35):
-       • RSI выше 65 + RES = Только Short.
-       • RSI ниже 35 + SUP = Только Long.
-    3. 📐 ДИСТАНЦИЯ:
-       • Вход строго в пределах 3-4% от текущей цены.
 
     АНАЛИЗИРУЙ ПО ЭТОЙ СТРУКТУРЕ (ТОЛЬКО HTML):
 
@@ -267,19 +245,16 @@ async def get_sniper_analysis(ticker, language="ru"):
     • <b>RES:</b> {indicators['resistances_list']}
 
     📡 <b>MARKET CONTEXT:</b>
-    • RSI: <b>{indicators['rsi']}</b> ({'🔥 ПЕРЕКУПЛЕН!' if rsi_val > 65 else '❄️ ПЕРЕПРОДАН!' if rsi_val < 35 else 'Нейтрально'})
+    • RSI: <b>{indicators['rsi']}</b> ({'🔥 ПЕРЕКУПЛЕН!' if indicators['rsi'] > 65 else '❄️ ПЕРЕПРОДАН!' if indicators['rsi'] < 35 else 'Нейтрально'})
     • Режим: <b>{indicators['regime']}</b>
 
     1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
     ▪️ <b>Фаза:</b> [Накопление/Распределение/Тренд]
-    ▪️ <b>Анализ:</b> [Оцени силу уровня и RSI]
+    ▪️ <b>Анализ:</b> [Оцени ситуацию с учетом уровней и RSI]
 
     2️⃣ <b>P-SCORE (ВЕРОЯТНОСТЬ)</b>
     ▪️ <b>P-Score:</b> <b>{p_score}%</b>
-       • База: 50%
-       • Режим: +10% (EXPANSION) / -10% (COMPRESSION/NEUTRAL)
-       • Уровень: +15% (Strong) / -20% (Weak)
-       • RSI: +5% (если RSI ниже 35 у SUP или выше 65 у RES)
+       • {p_score_details}
 
     🎯 <b>СНАЙПЕРСКИЙ ПЛАН</b>
     🚦 <b>Тип:</b> [LONG/SHORT] (Limit)
@@ -293,8 +268,8 @@ async def get_sniper_analysis(ticker, language="ru"):
        🟢 TP2: <code>[Цена]</code>
        
     <b>ОБОСНОВАНИЕ:</b>
-    1. <b>Фильтр:</b> [Сработал ли RSI?]
-    2. <b>Сила уровня:</b> [Weak/Medium/Strong?]
+    1. <b>Фильтр:</b> [RSI > 65 + RES = Short / RSI < 35 + SUP = Long]
+    2. <b>Сила уровня:</b> [Weak/Medium/Strong]
     3. <b>Риск:</b> 1%.
     
     {warning_html}

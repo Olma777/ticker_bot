@@ -6,7 +6,7 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
-# --- SETTINGS (UNLEASHED) ---
+# --- SETTINGS (PRODUCTION) ---
 SETTINGS = {
     'timeframe': '30m', 
     'reactBars': 24,    
@@ -15,8 +15,8 @@ SETTINGS = {
     'Wt': 1.0,          
     'Wa': 0.35,         
     'Tmin': 5,          
-    'scMin': -100.0,    # <--- FIXED: Видим все уровни, даже слабые
-    'maxDistPct': 50.0, # <--- FIXED: Смотрим глубоко
+    'scMin': -100.0,    
+    'maxDistPct': 50.0, 
     'atrLen': 14,
     'zWin': 180,        
     'zThr': 1.25
@@ -43,7 +43,7 @@ class Level:
         age = current_idx - self.last_touch_idx
         return (self.touches * SETTINGS['Wt']) - (age * SETTINGS['Wa'])
 
-async def fetch_ohlcv_data(exchange, symbol, limit=1500): # <--- INCREASED HISTORY
+async def fetch_ohlcv_data(exchange, symbol, limit=1500):
     try:
         ohlcv = await exchange.fetch_ohlcv(symbol, SETTINGS['timeframe'], limit=limit)
         if not ohlcv: return None
@@ -78,41 +78,6 @@ def calculate_global_regime(btc_df):
         
     safety = "RISKY" if regime == "COMPRESSION" else "SAFE"
     return regime, safety
-
-def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1_price, r1_price):
-    """
-    Рассчитывает вероятность сделки (0-100%).
-    Пороги синхронизированы: RSI 65/35.
-    """
-    score = 50 # База
-    
-    # 1. Regime Modifier
-    if regime == "EXPANSION": score += 10
-    elif regime in ["COMPRESSION", "NEUTRAL"]: score -= 10
-    
-    # 2. Определяем цель (Support или Resistance)
-    dist_s1 = abs(current_price - s1_price)
-    dist_r1 = abs(current_price - r1_price)
-    
-    if dist_s1 < dist_r1:
-        target_score = s1_score
-        is_support_target = True # Мы у поддержки -> хотим ЛОНГ
-    else:
-        target_score = r1_score
-        is_support_target = False # Мы у сопротивления -> хотим ШОРТ
-        
-    # 3. Level Strength Modifier
-    if target_score >= 3.0: score += 15   # Strong
-    elif target_score < 1.0: score -= 20  # Weak
-    # Medium (1.0-2.9) = 0
-    
-    # 4. RSI Modifier (Бонус за идеальный вход)
-    # Если RSI < 35 у Поддержки -> Отличный вход (+5)
-    if is_support_target and rsi < 35: score += 5
-    # Если RSI > 65 у Сопротивления -> Отличный вход (+5)
-    if not is_support_target and rsi > 65: score += 5
-    
-    return max(0, min(100, int(score)))
 
 def process_levels(df):
     levels = []
@@ -184,6 +149,53 @@ def process_levels(df):
     
     return active_supports[:5], active_resistances[:5]
 
+def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1_price, r1_price):
+    """
+    Рассчитывает P-Score (0-100%) и возвращает форматированный текст.
+    """
+    score = 50 
+    details = ["База: 50%"]
+    
+    # 1. Regime
+    if regime == "EXPANSION": 
+        score += 10
+        details.append("Режим: +10% (EXPANSION)")
+    elif regime in ["COMPRESSION", "NEUTRAL"]: 
+        score -= 10
+        details.append(f"Режим: -10% ({regime})")
+    
+    # 2. Level Strength & Proximity
+    dist_s1 = abs(current_price - s1_price)
+    dist_r1 = abs(current_price - r1_price)
+    
+    if dist_s1 < dist_r1:
+        target_score = s1_score
+        is_support_target = True
+    else:
+        target_score = r1_score
+        is_support_target = False
+        
+    if target_score >= 3.0: 
+        score += 15
+        details.append("Уровень: +15% (Strong)")
+    elif target_score < 1.0: 
+        score -= 20
+        details.append("Уровень: -20% (Weak)")
+    else:
+        details.append("Уровень: ±0% (Medium)")
+    
+    # 3. RSI Modifier (Optimized)
+    if (is_support_target and rsi < 35) or (not is_support_target and rsi > 65):
+        score += 5
+        details.append("RSI: +5% (Бонус за экстремум)")
+    else:
+        details.append("RSI: ±0% (Нет бонуса)")
+    
+    final_score = max(0, min(100, int(score)))
+    
+    # Format for Telegram
+    return final_score, "\n       • ".join(details)
+
 async def get_technical_indicators(ticker):
     exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
     try:
@@ -201,6 +213,7 @@ async def get_technical_indicators(ticker):
         sup_str = " | ".join([f"${s['price']:.4f} (Score: {s['score']:.1f})" for s in supports]) if supports else "НЕТ УРОВНЕЙ"
         res_str = " | ".join([f"${r['price']:.4f} (Score: {r['score']:.1f})" for r in resistances]) if resistances else "НЕТ УРОВНЕЙ"
         
+        # Fallbacks if list is empty (unlikely with scMin=-100)
         s1 = supports[0]['price'] if supports else df['low'].min()
         r1 = resistances[0]['price'] if resistances else df['high'].max()
         s1_score = supports[0]['score'] if supports else 0.0
@@ -215,6 +228,11 @@ async def get_technical_indicators(ticker):
         sma_50 = df['close'].rolling(window=50).mean().iloc[-1]
         trend = "BULLISH" if current_price > sma_50 else "BEARISH"
 
+        # --- P-SCORE CALCULATION ---
+        p_score, p_score_details = calculate_p_score(
+            regime, rsi, s1_score, r1_score, current_price, s1, r1
+        )
+
         return {
             "price": current_price,
             "rsi": round(rsi, 1),
@@ -225,6 +243,8 @@ async def get_technical_indicators(ticker):
             "r1": round(r1, 4),
             "s1_score": round(s1_score, 1),
             "r1_score": round(r1_score, 1),
+            "p_score": p_score,
+            "p_score_details": p_score_details, 
             "supports_list": sup_str, 
             "resistances_list": res_str
         }
