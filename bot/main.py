@@ -253,8 +253,15 @@ async def cmd_sniper(message: Message):
         # Удаляем сообщение о загрузке
         await loading_msg.delete()
         
-        # Отправляем отчет в HTML
-        await message.answer(report, parse_mode=ParseMode.HTML)
+        # ОТПРАВКА ОТЧЕТА (SAFETY NET)
+        try:
+            # Попытка 1: Красивый HTML
+            await message.answer(report, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logging.error(f"HTML Parse Error: {e}")
+            # Попытка 2: Если AI сломал теги, шлем чистый текст
+            clean_report = report.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "")
+            await message.answer(f"⚠️ Ошибка форматирования (Raw Text):\n\n{clean_report}")
         
     except Exception as e:
         logging.error(f"Error in cmd_sniper: {e}", exc_info=True)
