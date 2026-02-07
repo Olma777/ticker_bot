@@ -216,11 +216,11 @@ async def get_sniper_analysis(ticker, language="ru"):
     
     p_score = indicators['p_score']
     p_score_details = indicators['p_score_details']
+    strat = indicators['strategy']
     
-    # Логика предупреждения
-    warning_html = "⚠️ <b>ВНИМАНИЕ:</b> Низкий P-Score! Жди подтверждения объемом." if p_score < 50 else ""
+    warning_html = "⚠️ <b>ВНИМАНИЕ:</b> Низкий P-Score!" if p_score < 40 else ""
 
-    # ФИНАЛЬНЫЙ ПРОМТ (GOLD MASTER v3)
+    # ФИНАЛЬНЫЙ ПРОМТ (PRODUCTION STRATEGY)
     prompt = f"""
     Ты — профессиональный аналитик Liquidity Hunter (Smart Money).
     ТАЙМФРЕЙМ: 30 минут (Intraday).
@@ -228,14 +228,21 @@ async def get_sniper_analysis(ticker, language="ru"):
     ВХОДНЫЕ ДАННЫЕ:
     • Актив: {ticker.upper()} | Цена: ${curr_price}
     • RSI (14): {indicators['rsi']} | Тренд: {indicators['trend']}
-    • Режим: {indicators['regime']} | Безопасность: {indicators['safety']}
+    • Режим: {indicators['regime']}
     • P-SCORE: {p_score}%
     
+    СТРАТЕГИЯ (ЖЕСТКАЯ РЕКОМЕНДАЦИЯ АЛГОРИТМА):
+    • ДЕЙСТВИЕ: {strat['action']}
+    • ВХОД: {strat['entry']}
+    • СТОП: {strat['stop']}
+    • ТЕЙКИ: {strat['tp1']} / {strat['tp2']}
+    • ЛОГИКА: {strat['reason']}
+
     ВСЕ ВИДИМЫЕ УРОВНИ:
     • Поддержки (SUP): {indicators['supports_list']}
     • Сопротивления (RES): {indicators['resistances_list']}
 
-    АНАЛИЗИРУЙ ПО ЭТОЙ СТРУКТУРЕ (ТОЛЬКО HTML):
+    АНАЛИЗИРУЙ ПО ЭТОЙ СТРУКТУРЕ (HTML):
 
     📊 <b>{ticker.upper()} | Liquidity Hunter (M30)</b>
     💰 Цена: <code>${curr_price}</code> ({change}%)
@@ -245,32 +252,30 @@ async def get_sniper_analysis(ticker, language="ru"):
     • <b>RES:</b> {indicators['resistances_list']}
 
     📡 <b>MARKET CONTEXT:</b>
-    • RSI: <b>{indicators['rsi']}</b> ({'🔥 ПЕРЕКУПЛЕН!' if indicators['rsi'] > 65 else '❄️ ПЕРЕПРОДАН!' if indicators['rsi'] < 35 else 'Нейтрально'})
+    • RSI: <b>{indicators['rsi']}</b>
     • Режим: <b>{indicators['regime']}</b>
 
     1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
-    ▪️ <b>Фаза:</b> [Накопление/Распределение/Тренд]
-    ▪️ <b>Анализ:</b> [Оцени ситуацию с учетом уровней и RSI]
+    ▪️ <b>Фаза:</b> [Накопление/Распределение]
+    ▪️ <b>Анализ:</b> [Опиши контекст стратегии {strat['action']}]
 
     2️⃣ <b>P-SCORE (ВЕРОЯТНОСТЬ)</b>
     ▪️ <b>P-Score:</b> <b>{p_score}%</b>
        • {p_score_details}
 
     🎯 <b>СНАЙПЕРСКИЙ ПЛАН</b>
-    🚦 <b>Тип:</b> [LONG/SHORT] (Limit)
-    🚪 <b>Вход:</b> <code>[Цена]</code> (Строго у уровня!)
+    🚦 <b>Тип:</b> {strat['action']}
+    🚪 <b>Вход:</b> <code>{strat['entry']}</code>
 
     🛡 <b>Стоп-лосс:</b>
-       🔴 <code>[Цена]</code> (За зоной)
+       🔴 <code>{strat['stop']}</code>
 
     ✅ <b>Тейк-профиты:</b>
-       🟢 TP1: <code>[Цена]</code>
-       🟢 TP2: <code>[Цена]</code>
+       🟢 TP1: <code>{strat['tp1']}</code>
+       🟢 TP2: <code>{strat['tp2']}</code>
        
     <b>ОБОСНОВАНИЕ:</b>
-    1. <b>Фильтр:</b> [RSI > 65 + RES = Short / RSI < 35 + SUP = Long]
-    2. <b>Сила уровня:</b> [Weak/Medium/Strong]
-    3. <b>Риск:</b> 1%.
+    {strat['reason']}
     
     {warning_html}
     """

@@ -6,7 +6,7 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
-# --- SETTINGS (PRODUCTION) ---
+# --- SETTINGS ---
 SETTINGS = {
     'timeframe': '30m', 
     'reactBars': 24,    
@@ -143,20 +143,16 @@ def process_levels(df):
         if lvl.is_res and lvl.price > current_price: active_resistances.append(data)
         elif not lvl.is_res and lvl.price < current_price: active_supports.append(data)
     
-    # SORT BY DISTANCE (Closest First)
+    # SORT BY DISTANCE
     active_supports.sort(key=lambda x: abs(x['price'] - current_price))
     active_resistances.sort(key=lambda x: abs(x['price'] - current_price))
     
     return active_supports[:5], active_resistances[:5]
 
-def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1_price, r1_price):
-    """
-    Рассчитывает P-Score (0-100%) и возвращает форматированный текст.
-    """
+def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     score = 50 
     details = ["База: 50%"]
     
-    # 1. Regime
     if regime == "EXPANSION": 
         score += 10
         details.append("Режим: +10% (EXPANSION)")
@@ -164,9 +160,8 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1_price, 
         score -= 10
         details.append(f"Режим: -10% ({regime})")
     
-    # 2. Level Strength & Proximity
-    dist_s1 = abs(current_price - s1_price)
-    dist_r1 = abs(current_price - r1_price)
+    dist_s1 = abs(current_price - s1)
+    dist_r1 = abs(current_price - r1)
     
     if dist_s1 < dist_r1:
         target_score = s1_score
@@ -184,7 +179,6 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1_price, 
     else:
         details.append("Уровень: ±0% (Medium)")
     
-    # 3. RSI Modifier (Optimized)
     if (is_support_target and rsi < 35) or (not is_support_target and rsi > 65):
         score += 5
         details.append("RSI: +5% (Бонус за экстремум)")
@@ -192,9 +186,65 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1_price, 
         details.append("RSI: ±0% (Нет бонуса)")
     
     final_score = max(0, min(100, int(score)))
+    return final_score, "\n       • ".join(details), is_support_target
+
+def get_trading_strategy(p_score, is_support_target, current_price, s1, r1, rsi, atr):
+    """
+    DETERMINISTIC STRATEGY GENERATOR
+    """
+    if p_score < 40:
+        return {
+            "action": "WAIT",
+            "reason": f"P-Score слишком низкий ({p_score}%). Высокий риск.",
+            "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A"
+        }
+
+    stop_buffer = atr * 1.5 
     
-    # Format for Telegram
-    return final_score, "\n       • ".join(details)
+    if is_support_target:
+        # LONG SCENARIO
+        if rsi > 65:
+             return {
+                "action": "WAIT",
+                "reason": "Цена у поддержки, но RSI > 65 (Перекуплен). Жди отката.",
+                "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A"
+            }
+        
+        action = "LONG"
+        entry = s1
+        stop = s1 - stop_buffer 
+        
+        # TP1: 30% to R1
+        tp1 = current_price + abs(r1 - current_price) * 0.3
+        # TP2: R1 - buffer
+        tp2 = r1 - (atr * 0.5)
+        
+    else:
+        # SHORT SCENARIO
+        if rsi < 35:
+             return {
+                "action": "WAIT",
+                "reason": "Цена у сопротивления, но RSI < 35 (Перепродан). Жди отскока.",
+                "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A"
+            }
+
+        action = "SHORT"
+        entry = r1
+        stop = r1 + stop_buffer
+        
+        # TP1: 30% to S1
+        tp1 = current_price - abs(current_price - s1) * 0.3
+        # TP2: S1 + buffer
+        tp2 = s1 + (atr * 0.5)
+
+    return {
+        "action": action,
+        "reason": f"Сигнал {'BUY' if action=='LONG' else 'SELL'} (Score {p_score}%). RSI {rsi} подтверждает.",
+        "entry": f"${entry:.4f}",
+        "stop": f"${stop:.4f}",
+        "tp1": f"${tp1:.4f}",
+        "tp2": f"${tp2:.4f}"
+    }
 
 async def get_technical_indicators(ticker):
     exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
@@ -209,11 +259,11 @@ async def get_technical_indicators(ticker):
         supports, resistances = process_levels(df)
         
         current_price = df['close'].iloc[-1]
+        current_atr = df['atr'].iloc[-1]
         
         sup_str = " | ".join([f"${s['price']:.4f} (Score: {s['score']:.1f})" for s in supports]) if supports else "НЕТ УРОВНЕЙ"
         res_str = " | ".join([f"${r['price']:.4f} (Score: {r['score']:.1f})" for r in resistances]) if resistances else "НЕТ УРОВНЕЙ"
         
-        # Fallbacks if list is empty (unlikely with scMin=-100)
         s1 = supports[0]['price'] if supports else df['low'].min()
         r1 = resistances[0]['price'] if resistances else df['high'].max()
         s1_score = supports[0]['score'] if supports else 0.0
@@ -228,10 +278,11 @@ async def get_technical_indicators(ticker):
         sma_50 = df['close'].rolling(window=50).mean().iloc[-1]
         trend = "BULLISH" if current_price > sma_50 else "BEARISH"
 
-        # --- P-SCORE CALCULATION ---
-        p_score, p_score_details = calculate_p_score(
+        p_score, p_score_details, is_sup_target = calculate_p_score(
             regime, rsi, s1_score, r1_score, current_price, s1, r1
         )
+        
+        strategy = get_trading_strategy(p_score, is_sup_target, current_price, s1, r1, rsi, current_atr)
 
         return {
             "price": current_price,
@@ -246,7 +297,8 @@ async def get_technical_indicators(ticker):
             "p_score": p_score,
             "p_score_details": p_score_details, 
             "supports_list": sup_str, 
-            "resistances_list": res_str
+            "resistances_list": res_str,
+            "strategy": strategy 
         }
     finally:
         await exchange.close()
