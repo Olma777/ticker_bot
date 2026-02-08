@@ -227,9 +227,8 @@ def get_swing_strategy(daily_price, daily_s1, daily_r1, daily_rsi, daily_atr):
     return "WAIT", "Цена в середине Daily диапазона", "N/A", "N/A", "N/A"
 
 def get_sniper_strategy(p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target):
-    """ SNIPER STRATEGY (M30) - Returns structured data even if WAIT """
+    """ SNIPER STRATEGY (M30) """
     
-    # Base strategy calculation regardless of P-Score
     stop_buffer = m30_atr * 1.5
     
     if is_sup_target: # Potential LONG
@@ -243,7 +242,6 @@ def get_sniper_strategy(p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_
         stop = m30_r1 + stop_buffer
         tp = m30_s1
         
-    # Decision Logic
     if p_score < 40:
         return "WAIT", f"P-Score {p_score}% слишком низкий", "N/A", "N/A", "N/A"
         
@@ -270,7 +268,6 @@ async def get_technical_indicators(ticker):
         daily_df['rsi'] = calculate_rsi(daily_df)
         regime, safety = calculate_global_regime(btc_df)
         
-        # Levels with DISTANCE FILTER (20% for Daily to avoid noise)
         m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
         daily_sup, daily_res = process_levels(daily_df, timeframe_scaler=2.0, max_dist_pct=20.0)
         
@@ -299,7 +296,6 @@ async def get_technical_indicators(ticker):
             regime, m30_rsi, m30_s1_score, m30_r1_score, current_price, m30_s1, m30_r1
         )
         
-        # Strategies
         swing_action, swing_reason, swing_entry, swing_stop, swing_tp = get_swing_strategy(
             daily_price, daily_s1, daily_r1, daily_rsi, daily_atr
         )

@@ -223,8 +223,10 @@ async def get_sniper_analysis(ticker, language="ru"):
     Ты — Профессиональный Трейдер (Market Lens Analyst).
     Твоя задача — провести КОМПЛЕКСНЫЙ АНАЛИЗ монеты {ticker.upper()}.
     
-    ВАЖНО: ИСПОЛЬЗУЙ ТОЛЬКО ПОДДЕРЖИВАЕМЫЕ HTML ТЕГИ: <b>, <code>, <i>, <a>.
-    ЗАПРЕЩЕНО ИСПОЛЬЗОВАТЬ: <details>, <summary>, <mark>.
+    ВАЖНО:
+    1. ИСПОЛЬЗУЙ ТОЛЬКО ПОДДЕРЖИВАЕМЫЕ HTML ТЕГИ: <b>, <code>, <i>, <a>.
+    2. ЗАПРЕЩЕНО ИСПОЛЬЗОВАТЬ: <details>, <summary>, <mark>, <h1>-<h6>.
+    3. ЗАМЕНЯЙ СИМВОЛЫ "БОЛЬШЕ" И "МЕНЬШЕ" НА СЛОВА "выше"/"ниже" (чтобы не ломать HTML).
     
     ВХОДНЫЕ ДАННЫЕ:
     • Цена: ${curr_price} ({indicators['change']}%)
@@ -233,10 +235,10 @@ async def get_sniper_analysis(ticker, language="ru"):
     SENTIMENT:
     • Funding: {indicators['funding']} ({sentiment})
     • OI: {indicators['open_interest']}
-    • Liq Risk: Longs < {indicators['liq_long']} | Shorts > {indicators['liq_short']}
+    • Liq Risk: Longs ниже {indicators['liq_long']} | Shorts выше {indicators['liq_short']}
     
     1️⃣ MACRO (DAILY):
-    • RSI: {indicators['daily_rsi']}
+    • RSI (1D): {indicators['daily_rsi']}
     • Levels: SUP {indicators['daily_sup']} | RES {indicators['daily_res']}
     • STRAT: {swing['action']} | R: {swing['reason']} | E: {swing['entry']} | TP: {swing['tp']} | SL: {swing['stop']}
     
