@@ -6,7 +6,7 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
-# --- SETTINGS v2.3 STABLE ---
+# --- SETTINGS v2.3.1 ---
 SETTINGS = {
     'timeframe': '30m', 
     'reactBars': 12,    
@@ -20,7 +20,6 @@ SETTINGS = {
     'atrLen': 14,
     'zWin': 180,        
     'zThr': 1.25,
-    # Defaults (can be overridden)
     'default_capital': 1000.0, 
     'default_risk_pct': 1.0
 }
@@ -94,25 +93,18 @@ def calculate_vwap_24h(df):
 def calculate_global_regime(btc_df):
     if btc_df is None or btc_df.empty or len(btc_df) < SETTINGS['zWin']: 
         return "NEUTRAL", "SAFE"
-        
     roc = btc_df['close'].pct_change(30)
     if roc.isna().all(): return "NEUTRAL", "SAFE"
-    
     mean = roc.rolling(window=SETTINGS['zWin']).mean()
     std = roc.rolling(window=SETTINGS['zWin']).std()
-    
     if std.iloc[-1] == 0 or pd.isna(std.iloc[-1]): return "NEUTRAL", "SAFE"
     z_score = (roc - mean) / std
     current_z = z_score.iloc[-1]
-    
     if pd.isna(current_z): return "NEUTRAL", "SAFE"
     
-    if current_z > SETTINGS['zThr']: 
-        return "COMPRESSION", "RISKY"
-    elif current_z < -SETTINGS['zThr']: 
-        return "EXPANSION", "SAFE"
-    else: 
-        return "NEUTRAL", "SAFE"
+    if current_z > SETTINGS['zThr']: return "COMPRESSION", "RISKY"
+    elif current_z < -SETTINGS['zThr']: return "EXPANSION", "SAFE"
+    else: return "NEUTRAL", "SAFE"
 
 def process_levels(df, max_dist_pct=30.0):
     levels = []
@@ -121,19 +113,16 @@ def process_levels(df, max_dist_pct=30.0):
     atr = df['atr'].values
     high = df['high'].values
     low = df['low'].values
-    
     L, R = 4, 4 
     start_idx = max(SETTINGS['atrLen'], L + R)
     
     for i in range(start_idx, len(df) - R):
         if np.isnan(atr[i]): continue
-        
         is_pivot_h = True
         is_pivot_l = True
         for j in range(1, L + 1):
             if high[i] < high[i-j] or high[i] < high[i+j]: is_pivot_h = False
             if low[i] > low[i-j] or low[i] > low[i+j]: is_pivot_l = False
-            
         if is_pivot_h: pending.append({'idx': i, 'price': high[i], 'is_res': True, 'atr': atr[i], 'check_at': i + SETTINGS['reactBars']})
         if is_pivot_l: pending.append({'idx': i, 'price': low[i], 'is_res': False, 'atr': atr[i], 'check_at': i + SETTINGS['reactBars']})
             
@@ -144,12 +133,10 @@ def process_levels(df, max_dist_pct=30.0):
                 confirmed = False
                 window_low = np.min(low[p['idx'] : i+1])
                 window_high = np.max(high[p['idx'] : i+1])
-                
                 if p['is_res']:
                     if (p['price'] - window_low) >= reaction_dist: confirmed = True
                 else:
                     if (window_high - p['price']) >= reaction_dist: confirmed = True
-                
                 if confirmed:
                     merged = False
                     merge_tol = SETTINGS['mergeATR'] * p['atr']
@@ -166,7 +153,6 @@ def process_levels(df, max_dist_pct=30.0):
     current_price = df['close'].iloc[-1]
     active_supports = []
     active_resistances = []
-    
     for lvl in levels:
         score = lvl.get_score(current_idx)
         dist_pct = abs(lvl.price - current_price) / current_price * 100
@@ -180,55 +166,54 @@ def process_levels(df, max_dist_pct=30.0):
     return active_supports[:3], active_resistances[:3]
 
 def calculate_volatility_bands(current_price, atr):
-    vol_low = current_price - (atr * 2.0) 
-    vol_high = current_price + (atr * 2.0)
-    return vol_low, vol_high
+    return current_price - (atr * 2.0), current_price + (atr * 2.0)
 
 def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     score = 50 
-    details = ["База: 50%"]
+    details = ["• База: 50%"]
     
+    # 1. Regime
     if regime == "EXPANSION": 
         score += 10
-        details.append("Режим: +10% (EXPANSION)")
+        details.append("• Режим (BTC): +10% (EXPANSION)")
     elif regime == "COMPRESSION": 
         score -= 10
-        details.append(f"Режим: -10% ({regime})")
+        details.append(f"• Режим (BTC): -10% ({regime})")
     else:
-        details.append("Режим: 0% (NEUTRAL)")
+        details.append("• Режим (BTC): 0% (NEUTRAL)")
     
+    # 2. Levels Strength
     dist_s1 = abs(current_price - s1)
     dist_r1 = abs(current_price - r1)
-    
     if dist_s1 < dist_r1:
         target_score = s1_score
         is_support_target = True
+        lvl_type = "Support"
     else:
         target_score = r1_score
         is_support_target = False
+        lvl_type = "Resistance"
         
     if target_score >= 3.0: 
         score += 15
-        details.append("Уровень: +15% (Strong)")
+        details.append(f"• Уровень ({lvl_type}): +15% (Strong Score {target_score:.1f})")
     elif target_score < 1.0: 
         score -= 20
-        details.append("Уровень: -20% (Weak)")
+        details.append(f"• Уровень ({lvl_type}): -20% (Weak Score {target_score:.1f})")
     else:
-        details.append("Уровень: ±0% (Medium)")
+        details.append(f"• Уровень ({lvl_type}): 0% (Moderate Score {target_score:.1f})")
     
+    # 3. RSI
     if (is_support_target and rsi < 35) or (not is_support_target and rsi > 65):
         score += 5
-        details.append("RSI: +5% (Бонус за экстремум)")
+        details.append("• RSI Контекст: +5% (Контртренд)")
     else:
-        details.append("RSI: ±0% (Нет бонуса)")
+        details.append("• RSI Контекст: 0% (Нейтрально)")
     
     final_score = max(0, min(100, int(score)))
-    return final_score, "\n       • ".join(details), is_support_target
+    return final_score, "\n".join(details), is_support_target
 
 def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rsi, funding, vwap, capital=1000.0, risk_percent=1.0):
-    """
-    COMPLETE INTRADAY STRATEGY LOGIC WITH RISK MANAGEMENT (v2.3 STABLE)
-    """
     def empty_response(reason):
         return {
             "action": "WAIT", "reason": reason,
@@ -236,26 +221,17 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
             "risk_pct": 0, "position_size": 0, "risk_amount": 0, "rrr": 0
         }
 
-    # 1. P-Score Filter
-    if p_score < 40:
-        return empty_response(f"Strategy Score {p_score}% низкий. Рынок без четкой структуры.")
+    if p_score < 40: return empty_response(f"Strategy Score {p_score}% низкий (нужно >40%).")
+    if is_sup_target and rsi > 65: return empty_response("RSI > 65 у поддержки (Risk: Falling Knife).")
+    if not is_sup_target and rsi < 35: return empty_response("RSI < 35 у сопротивления (Risk: Bottom Short).")
 
-    # 2. RSI Guard
-    if is_sup_target and rsi > 65:
-         return empty_response("RSI > 65 у поддержки (падающий нож).")
-    if not is_sup_target and rsi < 35:
-         return empty_response("RSI < 35 у сопротивления (шорт дна).")
-
-    # 3. Sentiment Gate (0.03% threshold)
     funding_threshold = 0.0003
     if funding > funding_threshold and is_sup_target and current_price < vwap:
-        return empty_response(f"Лонговая ловушка: фандинг перегрет ({(funding*100):.3f}%), цена ниже VWAP.")
+        return empty_response(f"Sentiment Trap: Фандинг перегрет ({(funding*100):.3f}%) + Цена < VWAP.")
     if funding < -funding_threshold and not is_sup_target and current_price > vwap:
-        return empty_response(f"Шортовый сквиз: фандинг отрицательный ({(funding*100):.3f}%), цена выше VWAP.")
+        return empty_response(f"Sentiment Trap: Фандинг отрицательный ({(funding*100):.3f}%) + Цена > VWAP.")
 
-    # 4. Trade Construction
     stop_buffer = atr * 1.5
-    
     if is_sup_target:
         action = "LONG"
         entry = s1
@@ -273,7 +249,6 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
         tp2 = entry - (dist * 0.6)
         tp3 = s1 + (atr * 0.2)
 
-    # 5. Risk Management Calculation (with Zero Division Protection)
     risk_amount_usd = capital * (risk_percent / 100.0)
     price_diff = abs(entry - stop)
     
@@ -283,18 +258,14 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
         potential_profit = abs(tp3 - entry)
         rrr = potential_profit / price_diff
     else:
-        position_size = 0
-        risk_pct_distance = 0
-        rrr = 0
+        position_size = 0; risk_pct_distance = 0; rrr = 0
 
     return {
         "action": action,
-        "reason": f"Вход от уровня. Score: {p_score}%. RRR: 1:{rrr:.1f}",
-        "entry": entry,
-        "stop": stop,
-        "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "reason": f"Setup Valid. Score: {p_score}%. RRR: 1:{rrr:.1f}",
+        "entry": entry, "stop": stop, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "risk_pct": round(risk_pct_distance, 2),
-        "position_size": position_size, # Returning float, rounding in formatting
+        "position_size": position_size,
         "risk_amount": round(risk_amount_usd, 2),
         "rrr": round(rrr, 1)
     }
@@ -316,22 +287,21 @@ async def get_technical_indicators(ticker):
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
         regime, safety = calculate_global_regime(btc_df)
-        
         m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
         
         current_price = df['close'].iloc[-1]
         m30_atr = df['atr'].iloc[-1]
         m30_rsi = df['rsi'].iloc[-1]
         vwap_24h = calculate_vwap_24h(df)
-        
         vol_low, vol_high = calculate_volatility_bands(current_price, m30_atr)
         
         price_24h = df['close'].iloc[-47] if len(df) >= 47 else df['open'].iloc[0]
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
-        
         funding_fmt = f"{funding_rate*100:+.3f}%"
         
-        def fmt_lvls(lvls): return " | ".join([f"${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
+        # VISUAL IMPROVEMENT: Emojis for Levels
+        def icon(sc): return "🟢" if sc > 3.0 else "🟡" if sc > 0 else "🔴"
+        def fmt_lvls(lvls): return " | ".join([f"{icon(l['score'])} ${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
         
         m30_s1 = m30_sup[0]['price'] if m30_sup else df['low'].min()
         m30_r1 = m30_res[0]['price'] if m30_res else df['high'].max()
