@@ -189,9 +189,6 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     return final_score, "\n       • ".join(details), is_support_target
 
 def get_trading_strategy(p_score, is_support_target, current_price, s1, r1, rsi, atr):
-    """
-    DETERMINISTIC STRATEGY GENERATOR
-    """
     if p_score < 40:
         return {
             "action": "WAIT",
@@ -202,7 +199,6 @@ def get_trading_strategy(p_score, is_support_target, current_price, s1, r1, rsi,
     stop_buffer = atr * 1.5 
     
     if is_support_target:
-        # LONG SCENARIO
         if rsi > 65:
              return {
                 "action": "WAIT",
@@ -213,14 +209,10 @@ def get_trading_strategy(p_score, is_support_target, current_price, s1, r1, rsi,
         action = "LONG"
         entry = s1
         stop = s1 - stop_buffer 
-        
-        # TP1: 30% to R1
         tp1 = current_price + abs(r1 - current_price) * 0.3
-        # TP2: R1 - buffer
         tp2 = r1 - (atr * 0.5)
         
     else:
-        # SHORT SCENARIO
         if rsi < 35:
              return {
                 "action": "WAIT",
@@ -231,10 +223,7 @@ def get_trading_strategy(p_score, is_support_target, current_price, s1, r1, rsi,
         action = "SHORT"
         entry = r1
         stop = r1 + stop_buffer
-        
-        # TP1: 30% to S1
         tp1 = current_price - abs(current_price - s1) * 0.3
-        # TP2: S1 + buffer
         tp2 = s1 + (atr * 0.5)
 
     return {
@@ -261,6 +250,11 @@ async def get_technical_indicators(ticker):
         current_price = df['close'].iloc[-1]
         current_atr = df['atr'].iloc[-1]
         
+        # Calculate 24h Change (48 candles of 30m)
+        price_24h = df['close'].iloc[-49] if len(df) >= 49 else df['open'].iloc[0]
+        change_24h = ((current_price - price_24h) / price_24h) * 100
+        change_str = f"{change_24h:+.2f}"
+        
         sup_str = " | ".join([f"${s['price']:.4f} (Score: {s['score']:.1f})" for s in supports]) if supports else "НЕТ УРОВНЕЙ"
         res_str = " | ".join([f"${r['price']:.4f} (Score: {r['score']:.1f})" for r in resistances]) if resistances else "НЕТ УРОВНЕЙ"
         
@@ -286,6 +280,7 @@ async def get_technical_indicators(ticker):
 
         return {
             "price": current_price,
+            "change": change_str,
             "rsi": round(rsi, 1),
             "trend": trend,
             "regime": regime,
