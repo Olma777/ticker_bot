@@ -6,14 +6,14 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
-# --- SETTINGS v2.3.2 FINAL ---
+# --- SETTINGS v2.3.3 EMERGENCY FIX ---
 SETTINGS = {
     'timeframe': '30m', 
-    'reactBars': 24,    # 12 hours window
+    'reactBars': 24,    
     'kReact': 1.0,      
     'mergeATR': 0.6,
     'Wt': 1.0,          
-    'Wa': 0.25,         # Reduced decay (levels last longer)
+    'Wa': 0.15,         # DRASTICALLY REDUCED DECAY (was 0.25)
     'Tmin': 5,          
     'scMin': -100.0,    
     'maxDistPct': 50.0, 
@@ -41,8 +41,16 @@ class Level:
         self.touches = new_touches
         self.last_touch_idx = idx
 
-    def get_score(self, current_idx):
+    def get_score(self, current_idx, current_price=None):
         age = current_idx - self.last_touch_idx
+        
+        # LOGIC: Effective Age (Zone of Influence)
+        # If price is within 1% of level, reduce age penalty by 50%
+        if current_price is not None:
+            dist_pct = abs(self.price - current_price) / current_price * 100
+            if dist_pct < 1.0:
+                age = age * 0.5 # Level is "active" because price is near
+        
         return (self.touches * SETTINGS['Wt']) - (age * SETTINGS['Wa'])
 
 async def fetch_ohlcv_data(exchange, symbol, timeframe, limit=1500):
@@ -153,8 +161,10 @@ def process_levels(df, max_dist_pct=30.0):
     current_price = df['close'].iloc[-1]
     active_supports = []
     active_resistances = []
+    
+    # Pass current_price to get_score for "Effective Age" logic
     for lvl in levels:
-        score = lvl.get_score(current_idx)
+        score = lvl.get_score(current_idx, current_price)
         dist_pct = abs(lvl.price - current_price) / current_price * 100
         if dist_pct > max_dist_pct: continue
         data = {'price': lvl.price, 'score': score}
@@ -192,14 +202,11 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
         is_support_target = False
         lvl_type = "Resistance"
         
-    # TUNING: Thresholds synchronized with icons
-    # Strong >= 1.5 (+15%)
-    # Moderate >= 0.5 (0%)
-    # Weak < 0.5 (-20%)
-    if target_score >= 1.5: 
+    # TUNING: New thresholds (Strong >= 1.0, Weak < 0.0)
+    if target_score >= 1.0: 
         score += 15
         details.append(f"• Уровень ({lvl_type}): +15% (Strong Score {target_score:.1f})")
-    elif target_score < 0.5: 
+    elif target_score < 0.0: 
         score -= 20
         details.append(f"• Уровень ({lvl_type}): -20% (Weak Score {target_score:.1f})")
     else:
@@ -222,10 +229,7 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
             "risk_pct": 0, "position_size": 0, "risk_amount": 0, "rrr": 0
         }
 
-    # TUNING: Lowered P-Score threshold (35%)
     if p_score < 35: return empty_response(f"Strategy Score {p_score}% низкий (нужно >35%).")
-    
-    # TUNING: Widened RSI range (70/30)
     if is_sup_target and rsi > 70: return empty_response("RSI > 70 у поддержки (Overbought).")
     if not is_sup_target and rsi < 30: return empty_response("RSI < 30 у сопротивления (Oversold).")
 
@@ -303,8 +307,8 @@ async def get_technical_indicators(ticker):
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
         funding_fmt = f"{funding_rate*100:+.3f}%"
         
-        # VISUAL TUNING: Synchronized Icons (1.5 / 0.5)
-        def icon(sc): return "🟢" if sc >= 1.5 else "🟡" if sc >= 0.5 else "🔴"
+        # VISUAL TUNING: Synchronized Icons (1.0 / 0.0)
+        def icon(sc): return "🟢" if sc >= 1.0 else "🟡" if sc >= 0.0 else "🔴"
         def fmt_lvls(lvls): return " | ".join([f"{icon(l['score'])} ${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
         
         m30_s1 = m30_sup[0]['price'] if m30_sup else df['low'].min()
