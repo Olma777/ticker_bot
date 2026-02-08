@@ -216,6 +216,9 @@ async def get_sniper_analysis(ticker, language="ru"):
         sentiment = "Бычье" if fund_val > 0.01 else "Медвежье" if fund_val < -0.01 else "Нейтральное"
     except:
         sentiment = "N/A"
+        
+    sniper_action = "WAIT" if p_score < 40 else "TRADE"
+    sniper_reason = "P-Score < 40% (Высокий риск)" if p_score < 40 else "Ищи вход на M30 уровнях (P-Score > 40%)"
 
     # MARKET LENS V2.0 SUPER PROMPT
     prompt = f"""
@@ -223,26 +226,25 @@ async def get_sniper_analysis(ticker, language="ru"):
     Твоя задача — провести КОМПЛЕКСНЫЙ АНАЛИЗ монеты {ticker.upper()}.
     
     ВХОДНЫЕ ДАННЫЕ:
-    • Цена: ${curr_price} ({change}%)
+    • Цена: ${curr_price} ({indicators['change']}%)
     • Режим Рынка: {indicators['regime']}
     
     SENTIMENT & VOLUME:
     • Funding Rate: {indicators['funding']} ({sentiment})
-    • Open Interest: {indicators['open_interest']} (Следи за ростом OI при тренде)
-    • Est. Liquidation Zones: Longs < {indicators['liq_long']} | Shorts > {indicators['liq_short']}
+    • Open Interest: {indicators['open_interest']}
+    • Liquidation Risks: Longs < {indicators['liq_long']} | Shorts > {indicators['liq_short']}
     
     1️⃣ MACRO CONTEXT (DAILY):
     • RSI (1D): {indicators['daily_rsi']}
     • Daily Support: {indicators['daily_sup']}
     • Daily Resistance: {indicators['daily_res']}
-    • SWING STRATEGY (Algo): {swing['action']} | Entry: {swing['entry']} | TP: {swing['tp']} | Stop: {swing['stop']}
+    • SWING STRATEGY (Algo): {swing['action']} | Reason: {swing['reason']}
     
     2️⃣ MICRO CONTEXT (M30 - SNIPER):
     • RSI (30m): {indicators['m30_rsi']}
     • M30 Support: {indicators['m30_sup']}
     • M30 Resistance: {indicators['m30_res']}
-    • P-SCORE (Вероятность импульса M30): {p_score}%
-      {p_score_details}
+    • P-SCORE: {p_score}% ({p_score_details})
 
     СТРУКТУРА ОТВЕТА (HTML):
 
@@ -250,12 +252,16 @@ async def get_sniper_analysis(ticker, language="ru"):
     💰 Цена: <code>${curr_price}</code> ({change}%)
 
     1️⃣ <b>MACRO (1D) - СРЕДНЕСРОЧНЫЙ КОНТЕКСТ</b>
-    • <b>Структура:</b> [Опиши Daily тренд и RSI].
-    • <b>Ключевые зоны:</b> {indicators['daily_sup']} (SUP) / {indicators['daily_res']} (RES).
-    • <b>Sentiment:</b> Фандинг {indicators['funding']} и OI {indicators['open_interest']} указывают на [настроение].
+    • <b>Структура:</b> [Тренд, RSI, Фаза].
+    • <b>Ключевые зоны:</b>
+      - RES: {indicators['daily_res']}
+      - SUP: {indicators['daily_sup']}
+    • <b>Sentiment:</b> Funding {indicators['funding']} ({sentiment}) | OI {indicators['open_interest']}.
 
     2️⃣ <b>MICRO (M30) - ИНТРАДЕЙ СИТУАЦИЯ</b>
-    • <b>Уровни M30:</b> Цена зажата между {indicators['m30_sup']} и {indicators['m30_res']}.
+    • <b>Уровни M30:</b>
+      - RES: {indicators['m30_res']}
+      - SUP: {indicators['m30_sup']}
     • <b>P-Score:</b> <b>{p_score}%</b> ({'Высокий' if p_score > 60 else 'Средний' if p_score > 40 else 'Низкий'}).
     • <b>Ликвидность:</b> Риск сквиза лонгов ниже {indicators['liq_long']}.
 
@@ -269,7 +275,8 @@ async def get_sniper_analysis(ticker, language="ru"):
     <i>Обоснование: {swing['reason']}</i>
 
     🎯 <b>SNIPER (Интрадей M30):</b>
-    🚦 <b>Сигнал:</b> {'WAIT (Низкий P-Score)' if p_score < 40 else 'Ищи вход на M30 уровнях'}
+    🚦 <b>Сигнал:</b> {sniper_action}
+    <i>Обоснование: {sniper_reason}</i>
     <i>(P-Score {p_score}% - используй M30 уровни для скальпинга, если RSI подтверждает)</i>
 
     ⚠️ <b>ВНИМАНИЕ:</b> [Предупреждение о ликвидациях или новостях]

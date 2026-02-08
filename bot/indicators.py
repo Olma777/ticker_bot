@@ -97,7 +97,7 @@ def calculate_global_regime(btc_df):
     safety = "RISKY" if regime == "COMPRESSION" else "SAFE"
     return regime, safety
 
-def process_levels(df, timeframe_scaler=1.0):
+def process_levels(df, timeframe_scaler=1.0, max_dist_pct=50.0):
     levels = []
     pending = []
     atr = df['atr'].values
@@ -144,12 +144,17 @@ def process_levels(df, timeframe_scaler=1.0):
         pending = active_pending
 
     current_idx = len(df) - 1
+    current_price = close[-1]
     active_supports = []
     active_resistances = []
-    current_price = close[-1]
     
     for lvl in levels:
         score = lvl.get_score(current_idx)
+        
+        # DISTANCE FILTER
+        dist_pct = abs(lvl.price - current_price) / current_price * 100
+        if dist_pct > max_dist_pct: continue
+
         data = {'price': lvl.price, 'score': score}
         if lvl.is_res and lvl.price > current_price: active_resistances.append(data)
         elif not lvl.is_res and lvl.price < current_price: active_supports.append(data)
@@ -194,7 +199,6 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     else:
         details.append("Уровень: ±0% (Medium)")
     
-    # RSI бонус (M30 context)
     if (is_support_target and rsi < 35) or (not is_support_target and rsi > 65):
         score += 5
         details.append("RSI: +5% (Бонус за экстремум)")
@@ -205,9 +209,6 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     return final_score, "\n       • ".join(details), is_support_target
 
 def get_swing_strategy(daily_price, daily_s1, daily_r1, daily_rsi, daily_atr):
-    """
-    SWING STRATEGY (DAILY CONTEXT)
-    """
     if daily_rsi > 70:
         return "WAIT", "RSI Daily перегрет (>70)", "N/A", "N/A", "N/A"
     if daily_rsi < 30:
@@ -228,7 +229,6 @@ def get_swing_strategy(daily_price, daily_s1, daily_r1, daily_rsi, daily_atr):
 async def get_technical_indicators(ticker):
     exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
     try:
-        # Data Fetching
         m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", SETTINGS['timeframe'], limit=1500)
         daily_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", SETTINGS['swing_timeframe'], limit=365)
         btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", SETTINGS['timeframe'], limit=1500)
@@ -241,7 +241,6 @@ async def get_technical_indicators(ticker):
         
         if df is None or df.empty or daily_df is None: return None
 
-        # --- CALCULATIONS ---
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
         
@@ -250,31 +249,25 @@ async def get_technical_indicators(ticker):
         
         regime, safety = calculate_global_regime(btc_df)
         
-        # Levels
-        m30_sup, m30_res = process_levels(df)
-        daily_sup, daily_res = process_levels(daily_df, timeframe_scaler=2.0)
+        # Levels with DISTANCE FILTER (20% for Daily)
+        m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
+        daily_sup, daily_res = process_levels(daily_df, timeframe_scaler=2.0, max_dist_pct=20.0)
         
-        # Prices & ATR
         current_price = df['close'].iloc[-1]
         daily_price = daily_df['close'].iloc[-1]
         daily_atr = daily_df['atr'].iloc[-1]
         m30_atr = df['atr'].iloc[-1]
         
-        # Indicators
         m30_rsi = df['rsi'].iloc[-1]
         daily_rsi = daily_df['rsi'].iloc[-1]
         
-        # Liquidity Est
         liq_long, liq_short = estimate_liquidation_levels(current_price, m30_atr)
         
-        # 24h Change
         price_24h = df['close'].iloc[-49] if len(df) >= 49 else df['open'].iloc[0]
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
         
-        # Format Strings
-        def fmt_lvls(lvls): return " | ".join([f"${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
+        def fmt_lvls(lvls): return " | ".join([f"${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ (слишком далеко)"
         
-        # Fallbacks
         m30_s1 = m30_sup[0]['price'] if m30_sup else df['low'].min()
         m30_r1 = m30_res[0]['price'] if m30_res else df['high'].max()
         m30_s1_score = m30_sup[0]['score'] if m30_sup else 0.0
@@ -283,13 +276,10 @@ async def get_technical_indicators(ticker):
         daily_s1 = daily_sup[0]['price'] if daily_sup else daily_df['low'].min()
         daily_r1 = daily_res[0]['price'] if daily_res else daily_df['high'].max()
 
-        # --- STRATEGIES ---
-        # 1. P-Score (M30 Sniper Context)
         p_score, p_score_details, is_sup_target = calculate_p_score(
             regime, m30_rsi, m30_s1_score, m30_r1_score, current_price, m30_s1, m30_r1
         )
         
-        # 2. Swing Strategy (Daily Context)
         swing_action, swing_reason, swing_entry, swing_stop, swing_tp = get_swing_strategy(
             daily_price, daily_s1, daily_r1, daily_rsi, daily_atr
         )
