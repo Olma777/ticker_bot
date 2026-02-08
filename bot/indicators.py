@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 # --- SETTINGS ---
 SETTINGS = {
     'timeframe': '30m', 
-    'swing_timeframe': '1d', 
     'reactBars': 24,    
     'kReact': 1.3,
     'mergeATR': 0.6,
@@ -82,6 +81,14 @@ def calculate_rsi(df, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+def calculate_vwap_24h(df):
+    """Calculates Volume Weighted Average Price for the last 24h (approx 48 candles of 30m)"""
+    if len(df) < 48:
+        return df['close'].mean()
+    last_24h = df.tail(48)
+    vwap = (last_24h['close'] * last_24h['volume']).sum() / last_24h['volume'].sum()
+    return vwap
+
 def calculate_global_regime(btc_df):
     if btc_df is None or len(btc_df) < SETTINGS['zWin']: return "NEUTRAL", "SAFE"
     roc = btc_df['close'].pct_change(30)
@@ -97,7 +104,7 @@ def calculate_global_regime(btc_df):
     safety = "RISKY" if regime == "COMPRESSION" else "SAFE"
     return regime, safety
 
-def process_levels(df, timeframe_scaler=1.0, max_dist_pct=50.0):
+def process_levels(df, max_dist_pct=30.0):
     levels = []
     pending = []
     atr = df['atr'].values
@@ -121,7 +128,7 @@ def process_levels(df, timeframe_scaler=1.0, max_dist_pct=50.0):
         active_pending = []
         for p in pending:
             if i >= p['check_at']:
-                reaction_dist = SETTINGS['kReact'] * p['atr'] * timeframe_scaler
+                reaction_dist = SETTINGS['kReact'] * p['atr']
                 confirmed = False
                 window_low = np.min(low[p['idx'] : i+1])
                 window_high = np.max(high[p['idx'] : i+1])
@@ -133,7 +140,7 @@ def process_levels(df, timeframe_scaler=1.0, max_dist_pct=50.0):
                 
                 if confirmed:
                     merged = False
-                    merge_tol = SETTINGS['mergeATR'] * p['atr'] * timeframe_scaler
+                    merge_tol = SETTINGS['mergeATR'] * p['atr']
                     for lvl in levels:
                         if lvl.is_res == p['is_res'] and abs(lvl.price - p['price']) < merge_tol:
                             lvl.update(p['price'], p['atr'], i)
@@ -150,10 +157,8 @@ def process_levels(df, timeframe_scaler=1.0, max_dist_pct=50.0):
     
     for lvl in levels:
         score = lvl.get_score(current_idx)
-        # DISTANCE FILTER
         dist_pct = abs(lvl.price - current_price) / current_price * 100
         if dist_pct > max_dist_pct: continue
-        
         data = {'price': lvl.price, 'score': score}
         if lvl.is_res and lvl.price > current_price: active_resistances.append(data)
         elif not lvl.is_res and lvl.price < current_price: active_supports.append(data)
@@ -163,10 +168,14 @@ def process_levels(df, timeframe_scaler=1.0, max_dist_pct=50.0):
     
     return active_supports[:3], active_resistances[:3]
 
-def estimate_liquidation_levels(current_price, atr):
-    long_liq = current_price - (atr * 2.0) 
-    short_liq = current_price + (atr * 2.0)
-    return long_liq, short_liq
+def calculate_volatility_bands(current_price, atr):
+    """
+    Calculates statistical volatility extremes (2.0 ATR).
+    Renamed from 'estimate_liquidation_levels' to be accurate.
+    """
+    vol_low = current_price - (atr * 2.0) 
+    vol_high = current_price + (atr * 2.0)
+    return vol_low, vol_high
 
 def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     score = 50 
@@ -207,125 +216,130 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     final_score = max(0, min(100, int(score)))
     return final_score, "\n       • ".join(details), is_support_target
 
-def get_swing_strategy(daily_price, daily_s1, daily_r1, daily_rsi, daily_atr):
-    """ SWING STRATEGY (DAILY) """
-    if daily_rsi > 70:
-        return "WAIT", "RSI Daily перегрет (>70)", "N/A", "N/A", "N/A"
-    if daily_rsi < 30:
-        return "WAIT", "RSI Daily перепродан (<30)", "N/A", "N/A", "N/A"
-
-    dist_s = abs(daily_price - daily_s1)
-    dist_r = abs(daily_price - daily_r1)
-    
-    if dist_s < dist_r: # Closer to Support
-        if daily_rsi < 55:
-            return "LONG", "Отскок от Daily Support", f"${daily_s1:.4f}", f"${(daily_s1 - daily_atr):.4f}", f"${daily_r1:.4f}"
-    else: # Closer to Resistance
-        if daily_rsi > 45:
-            return "SHORT", "Отбой от Daily Resistance", f"${daily_r1:.4f}", f"${(daily_r1 + daily_atr):.4f}", f"${daily_s1:.4f}"
-            
-    return "WAIT", "Цена в середине Daily диапазона", "N/A", "N/A", "N/A"
-
-def get_sniper_strategy(p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target):
-    """ SNIPER STRATEGY (M30) """
-    
-    stop_buffer = m30_atr * 1.5
-    
-    if is_sup_target: # Potential LONG
-        action = "LONG"
-        entry = m30_s1
-        stop = m30_s1 - stop_buffer
-        tp = m30_r1
-    else: # Potential SHORT
-        action = "SHORT"
-        entry = m30_r1
-        stop = m30_r1 + stop_buffer
-        tp = m30_s1
-        
+def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rsi, funding, vwap):
+    """
+    SMART STRATEGY with VWAP + SENTIMENT FILTER (v2.1 Honest Engineer)
+    """
+    # 1. P-Score Filter (Noise Protection)
     if p_score < 40:
-        return "WAIT", f"P-Score {p_score}% слишком низкий", "N/A", "N/A", "N/A"
-        
-    return action, f"P-Score {p_score}% > 40%, вход от уровня", f"${entry:.4f}", f"${stop:.4f}", f"${tp:.4f}"
+        return {
+            "action": "WAIT",
+            "reason": f"Strategy Score {p_score}% низкий. Высокий риск шума.",
+            "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A"
+        }
+
+    # 2. RSI Extreme Protection
+    if is_sup_target and rsi > 65:
+         return { "action": "WAIT", "reason": "Цена у поддержки, но RSI > 65 (падающий нож).", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
+    if not is_sup_target and rsi < 35:
+         return { "action": "WAIT", "reason": "Цена у сопротивления, но RSI < 35 (шорт дна).", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
+
+    # 3. SMART SENTIMENT FILTER
+    # FIX: Threshold 0.03% -> 0.0003 (Binance API uses decimals)
+    funding_threshold = 0.0003 
+    
+    # LONG Trap Check: High funding (Crowd Longs) BUT Price < VWAP (No trend support)
+    if funding > funding_threshold: 
+        if is_sup_target and current_price < vwap: 
+             return { "action": "WAIT", "reason": f"Фандинг перегрет ({funding*100:.3f}%) при цене ниже VWAP. Риск лонговой ловушки.", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
+    
+    # SHORT Squeeze Check: Negative funding (Crowd Shorts) BUT Price > VWAP (Strong trend)
+    if funding < -funding_threshold: 
+        if not is_sup_target and current_price > vwap: 
+             return { "action": "WAIT", "reason": f"Фандинг отрицательный ({funding*100:.3f}%) при цене выше VWAP. Риск шортового сквиза.", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
+
+    # Strategy Construction
+    stop_buffer = atr * 1.5
+    
+    if is_sup_target:
+        action = "LONG"
+        entry = s1
+        stop = s1 - stop_buffer
+        dist = abs(r1 - s1)
+        tp1 = entry + (dist * 0.3)
+        tp2 = entry + (dist * 0.6)
+        tp3 = r1 - (atr * 0.2)
+    else:
+        action = "SHORT"
+        entry = r1
+        stop = r1 + stop_buffer
+        dist = abs(r1 - s1)
+        tp1 = entry - (dist * 0.3)
+        tp2 = entry - (dist * 0.6)
+        tp3 = s1 + (atr * 0.2)
+
+    return {
+        "action": action,
+        "reason": f"Вход от уровня с подтверждением Strategy Score ({p_score}%). VWAP/Funding фильтр пройден.",
+        "entry": f"${entry:.4f}",
+        "stop": f"${stop:.4f}",
+        "tp1": f"${tp1:.4f}",
+        "tp2": f"${tp2:.4f}",
+        "tp3": f"${tp3:.4f}"
+    }
 
 async def get_technical_indicators(ticker):
     exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
     try:
         m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", SETTINGS['timeframe'], limit=1500)
-        daily_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", SETTINGS['swing_timeframe'], limit=365)
         btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", SETTINGS['timeframe'], limit=1500)
         funding_task = fetch_funding_rate(exchange, f"{ticker.upper()}/USDT")
         oi_task = fetch_open_interest(exchange, f"{ticker.upper()}/USDT")
 
-        df, daily_df, btc_df, funding_rate, open_interest = await asyncio.gather(
-            m30_task, daily_task, btc_task, funding_task, oi_task
+        df, btc_df, funding_rate, open_interest = await asyncio.gather(
+            m30_task, btc_task, funding_task, oi_task
         )
         
-        if df is None or df.empty or daily_df is None: return None
+        if df is None or df.empty: return None
 
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
-        daily_df['atr'] = calculate_atr(daily_df)
-        daily_df['rsi'] = calculate_rsi(daily_df)
         regime, safety = calculate_global_regime(btc_df)
         
         m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
-        daily_sup, daily_res = process_levels(daily_df, timeframe_scaler=2.0, max_dist_pct=20.0)
         
         current_price = df['close'].iloc[-1]
-        daily_price = daily_df['close'].iloc[-1]
-        daily_atr = daily_df['atr'].iloc[-1]
         m30_atr = df['atr'].iloc[-1]
         m30_rsi = df['rsi'].iloc[-1]
-        daily_rsi = daily_df['rsi'].iloc[-1]
-        liq_long, liq_short = estimate_liquidation_levels(current_price, m30_atr)
+        vwap_24h = calculate_vwap_24h(df)
+        
+        # Volatility Bands (ex. Liquidation Zones)
+        vol_low, vol_high = calculate_volatility_bands(current_price, m30_atr)
         
         price_24h = df['close'].iloc[-49] if len(df) >= 49 else df['open'].iloc[0]
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
         
-        def fmt_lvls(lvls): return " | ".join([f"${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ (слишком далеко)"
+        def fmt_lvls(lvls): return " | ".join([f"${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
         
         m30_s1 = m30_sup[0]['price'] if m30_sup else df['low'].min()
         m30_r1 = m30_res[0]['price'] if m30_res else df['high'].max()
         m30_s1_score = m30_sup[0]['score'] if m30_sup else 0.0
         m30_r1_score = m30_res[0]['score'] if m30_res else 0.0
-        
-        daily_s1 = daily_sup[0]['price'] if daily_sup else daily_df['low'].min()
-        daily_r1 = daily_res[0]['price'] if daily_res else daily_df['high'].max()
 
         p_score, p_score_details, is_sup_target = calculate_p_score(
             regime, m30_rsi, m30_s1_score, m30_r1_score, current_price, m30_s1, m30_r1
         )
         
-        swing_action, swing_reason, swing_entry, swing_stop, swing_tp = get_swing_strategy(
-            daily_price, daily_s1, daily_r1, daily_rsi, daily_atr
-        )
-        
-        sniper_action, sniper_reason, sniper_entry, sniper_stop, sniper_tp = get_sniper_strategy(
-            p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target
+        # Strategy with Smart Filter
+        strat = get_intraday_strategy(
+            p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target, m30_rsi, funding_rate, vwap_24h
         )
 
         return {
             "price": current_price,
             "change": change_str,
-            "m30_rsi": round(m30_rsi, 1),
-            "daily_rsi": round(daily_rsi, 1),
+            "rsi": round(m30_rsi, 1),
             "regime": regime,
             "funding": f"{funding_rate:.4f}%",
             "open_interest": f"${open_interest:,.0f}" if open_interest else "N/A",
-            "daily_sup": fmt_lvls(daily_sup),
-            "daily_res": fmt_lvls(daily_res),
-            "m30_sup": fmt_lvls(m30_sup),
-            "m30_res": fmt_lvls(m30_res),
-            "liq_long": f"${liq_long:.4f}",
-            "liq_short": f"${liq_short:.4f}",
+            "support": fmt_lvls(m30_sup),
+            "resistance": fmt_lvls(m30_res),
+            "vol_low": f"${vol_low:.4f}",
+            "vol_high": f"${vol_high:.4f}",
+            "vwap": f"${vwap_24h:.4f}",
             "p_score": p_score,
             "p_score_details": p_score_details,
-            "swing_strat": {
-                "action": swing_action, "reason": swing_reason, "entry": swing_entry, "stop": swing_stop, "tp": swing_tp
-            },
-            "sniper_strat": {
-                "action": sniper_action, "reason": sniper_reason, "entry": sniper_entry, "stop": sniper_stop, "tp": sniper_tp
-            }
+            "strategy": strat
         }
     finally:
         await exchange.close()

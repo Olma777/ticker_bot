@@ -208,8 +208,7 @@ async def get_sniper_analysis(ticker, language="ru"):
     
     p_score = indicators['p_score']
     p_score_details = indicators['p_score_details']
-    swing = indicators['swing_strat']
-    sniper = indicators['sniper_strat']
+    strat = indicators['strategy']
     
     # Funding interpretation
     try:
@@ -218,73 +217,73 @@ async def get_sniper_analysis(ticker, language="ru"):
     except:
         sentiment = "N/A"
 
-    # MARKET LENS V2.0 SUPER PROMPT
+    # M30 SNIPER v2.1 PROMPT
     prompt = f"""
-    Ты — Профессиональный Трейдер (Market Lens Analyst).
-    Твоя задача — провести КОМПЛЕКСНЫЙ АНАЛИЗ монеты {ticker.upper()}.
+    Ты — Профессиональный Интрадей Трейдер (M30 Sniper).
+    Твоя задача — дать ОДИН четкий торговый план на основе данных.
     
     ВАЖНО:
-    1. ИСПОЛЬЗУЙ ТОЛЬКО ПОДДЕРЖИВАЕМЫЕ HTML ТЕГИ: <b>, <code>, <i>, <a>.
-    2. ЗАПРЕЩЕНО ИСПОЛЬЗОВАТЬ: <details>, <summary>, <mark>, <h1>-<h6>.
-    3. ЗАМЕНЯЙ СИМВОЛЫ "БОЛЬШЕ" И "МЕНЬШЕ" НА СЛОВА "выше"/"ниже" (чтобы не ломать HTML).
+    1. ИСПОЛЬЗУЙ ТОЛЬКО ПОДДЕРЖИВАЕМЫЕ HTML ТЕГИ: <b>, <code>, <i>.
+    2. ЗАМЕНЯЙ СИМВОЛЫ "БОЛЬШЕ/МЕНЬШЕ" НА СЛОВА "выше/ниже".
     
     ВХОДНЫЕ ДАННЫЕ:
     • Цена: ${curr_price} ({indicators['change']}%)
-    • Режим Рынка: {indicators['regime']}
+    • VWAP (24h): {indicators['vwap']}
+    • RSI (M30): {indicators['rsi']}
     
-    SENTIMENT:
+    SENTIMENT (MULTITOOL):
     • Funding: {indicators['funding']} ({sentiment})
-    • OI: {indicators['open_interest']}
-    • Liq Risk: Longs ниже {indicators['liq_long']} | Shorts выше {indicators['liq_short']}
+    • Open Interest: {indicators['open_interest']}
+    • Volatility Bands (ATR): Low {indicators['vol_low']} | High {indicators['vol_high']}
     
-    1️⃣ MACRO (DAILY):
-    • RSI (1D): {indicators['daily_rsi']}
-    • Levels: SUP {indicators['daily_sup']} | RES {indicators['daily_res']}
-    • STRAT: {swing['action']} | R: {swing['reason']} | E: {swing['entry']} | TP: {swing['tp']} | SL: {swing['stop']}
+    КЛЮЧЕВЫЕ УРОВНИ (M30):
+    • RESISTANCE: {indicators['resistance']}
+    • SUPPORT: {indicators['support']}
     
-    2️⃣ MICRO (M30):
-    • RSI: {indicators['m30_rsi']}
-    • Levels: SUP {indicators['m30_sup']} | RES {indicators['m30_res']}
-    • P-SCORE: {p_score}% ({p_score_details})
-    • STRAT: {sniper['action']} | R: {sniper['reason']} | E: {sniper['entry']} | TP: {sniper['tp']} | SL: {sniper['stop']}
+    STRATEGY SCORE (ЭКСПЕРТНАЯ ОЦЕНКА): {p_score}%
+    {indicators['p_score_details']}
+    
+    ТОРГОВЫЙ ПЛАН (SMART FILTERED):
+    • Action: {strat['action']}
+    • Reason: {strat['reason']}
+    • Entry: {strat['entry']}
+    • Stop: {strat['stop']}
+    • TP1: {strat['tp1']} | TP2: {strat['tp2']} | TP3: {strat['tp3']}
 
     СТРУКТУРА ОТВЕТА (HTML):
 
-    📊 <b>{ticker.upper()} | MARKET LENS</b>
+    📊 <b>{ticker.upper()} | M30 SNIPER</b>
     💰 Цена: <code>${curr_price}</code> ({change}%)
 
-    1️⃣ <b>MACRO (1D) - СРЕДНЕСРОЧНЫЙ КОНТЕКСТ</b>
-    • <b>Структура:</b> [Тренд, RSI, Фаза].
-    • <b>Ключевые зоны:</b>
-      - RES: {indicators['daily_res']}
-      - SUP: {indicators['daily_sup']}
-    • <b>Sentiment:</b> Funding {indicators['funding']} ({sentiment}) | OI {indicators['open_interest']}.
+    📡 <b>MARKET CONTEXT (SENTIMENT):</b>
+    • <b>RSI:</b> {indicators['rsi']} ({'Перегрет' if indicators['rsi'] > 65 else 'Перепродан' if indicators['rsi'] < 35 else 'Нейтрально'}).
+    • <b>Funding:</b> {indicators['funding']} ({sentiment}).
+    • <b>Volatility Bands (ATR):</b> Статистический диапазон движения: {indicators['vol_low']} — {indicators['vol_high']}.
 
-    2️⃣ <b>MICRO (M30) - ИНТРАДЕЙ СИТУАЦИЯ</b>
-    • <b>Уровни M30:</b>
-      - RES: {indicators['m30_res']}
-      - SUP: {indicators['m30_sup']}
-    • <b>P-Score:</b> <b>{p_score}%</b> ({'Высокий' if p_score > 60 else 'Средний' if p_score > 40 else 'Низкий'}).
-    • <b>Ликвидность:</b> Риск сквиза лонгов ниже {indicators['liq_long']}.
+    🎯 <b>КЛЮЧЕВЫЕ ЗОНЫ (M30):</b>
+    • <b>RES:</b> {indicators['resistance']}
+    • <b>SUP:</b> {indicators['support']}
 
-    3️⃣ <b>ТОРГОВЫЕ СТРАТЕГИИ</b>
-    
-    🌊 <b>SWING (Среднесрок):</b>
-    🚦 <b>Сигнал:</b> {swing['action']}
-    🚪 <b>Вход:</b> <code>{swing['entry']}</code>
-    🎯 <b>Цель:</b> <code>{swing['tp']}</code>
-    🛡 <b>Стоп:</b> <code>{swing['stop']}</code>
-    <i>Обоснование: {swing['reason']}</i>
+    1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
+    • <b>Тренд:</b> Цена {'выше' if curr_price > float(indicators['vwap'].replace('$','')) else 'ниже'} VWAP ({indicators['vwap']}).
+    • <b>Strategy Score:</b> <b>{p_score}%</b> ({'Высокий' if p_score > 60 else 'Средний' if p_score > 40 else 'Низкий'}).
+    • <b>Анализ:</b> [Почему алгоритм выбрал {strat['action']}?].
 
-    🎯 <b>SNIPER (Интрадей M30):</b>
-    🚦 <b>Сигнал:</b> {sniper['action']}
-    🚪 <b>Вход:</b> <code>{sniper['entry']}</code>
-    🎯 <b>Цель:</b> <code>{sniper['tp']}</code>
-    🛡 <b>Стоп:</b> <code>{sniper['stop']}</code>
-    <i>Обоснование: {sniper['reason']}</i>
-    <i>(P-Score {p_score}% - используй M30 уровни для скальпинга, если RSI подтверждает)</i>
+    2️⃣ <b>СНАЙПЕРСКИЙ ПЛАН</b>
+    🚦 <b>Тип:</b> {strat['action']}
+    🚪 <b>Вход:</b> <code>{strat['entry']}</code>
+    🛡 <b>Стоп-лосс:</b> 🔴 <code>{strat['stop']}</code>
+    ✅ <b>Тейк-профиты:</b>
+       🟢 TP1: <code>{strat['tp1']}</code> (Safe)
+       🟢 TP2: <code>{strat['tp2']}</code> (Level)
+       🟢 TP3: <code>{strat['tp3']}</code> (Runner)
 
-    ⚠️ <b>ВНИМАНИЕ:</b> [Предупреждение о рисках]
+    <b>ОБОСНОВАНИЕ:</b>
+    {strat['reason']}
+
+    ⚠️ <b>УСЛОВИЯ ВХОДА:</b>
+    • Вход строго лимитным ордером.
+    • Жди закрытия свечи M30 для подтверждения.
     """
 
     client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
