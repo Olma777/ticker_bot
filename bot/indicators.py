@@ -6,14 +6,14 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
-# --- SETTINGS v2.3.1 ---
+# --- SETTINGS v2.3.2 FINAL ---
 SETTINGS = {
     'timeframe': '30m', 
-    'reactBars': 12,    
+    'reactBars': 24,    # 12 hours window
     'kReact': 1.0,      
     'mergeATR': 0.6,
     'Wt': 1.0,          
-    'Wa': 0.35,         
+    'Wa': 0.25,         # Reduced decay (levels last longer)
     'Tmin': 5,          
     'scMin': -100.0,    
     'maxDistPct': 50.0, 
@@ -172,7 +172,6 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     score = 50 
     details = ["• База: 50%"]
     
-    # 1. Regime
     if regime == "EXPANSION": 
         score += 10
         details.append("• Режим (BTC): +10% (EXPANSION)")
@@ -182,7 +181,6 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     else:
         details.append("• Режим (BTC): 0% (NEUTRAL)")
     
-    # 2. Levels Strength
     dist_s1 = abs(current_price - s1)
     dist_r1 = abs(current_price - r1)
     if dist_s1 < dist_r1:
@@ -194,16 +192,19 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
         is_support_target = False
         lvl_type = "Resistance"
         
-    if target_score >= 3.0: 
+    # TUNING: Thresholds synchronized with icons
+    # Strong >= 1.5 (+15%)
+    # Moderate >= 0.5 (0%)
+    # Weak < 0.5 (-20%)
+    if target_score >= 1.5: 
         score += 15
         details.append(f"• Уровень ({lvl_type}): +15% (Strong Score {target_score:.1f})")
-    elif target_score < 1.0: 
+    elif target_score < 0.5: 
         score -= 20
         details.append(f"• Уровень ({lvl_type}): -20% (Weak Score {target_score:.1f})")
     else:
         details.append(f"• Уровень ({lvl_type}): 0% (Moderate Score {target_score:.1f})")
     
-    # 3. RSI
     if (is_support_target and rsi < 35) or (not is_support_target and rsi > 65):
         score += 5
         details.append("• RSI Контекст: +5% (Контртренд)")
@@ -221,9 +222,12 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
             "risk_pct": 0, "position_size": 0, "risk_amount": 0, "rrr": 0
         }
 
-    if p_score < 40: return empty_response(f"Strategy Score {p_score}% низкий (нужно >40%).")
-    if is_sup_target and rsi > 65: return empty_response("RSI > 65 у поддержки (Risk: Falling Knife).")
-    if not is_sup_target and rsi < 35: return empty_response("RSI < 35 у сопротивления (Risk: Bottom Short).")
+    # TUNING: Lowered P-Score threshold (35%)
+    if p_score < 35: return empty_response(f"Strategy Score {p_score}% низкий (нужно >35%).")
+    
+    # TUNING: Widened RSI range (70/30)
+    if is_sup_target and rsi > 70: return empty_response("RSI > 70 у поддержки (Overbought).")
+    if not is_sup_target and rsi < 30: return empty_response("RSI < 30 у сопротивления (Oversold).")
 
     funding_threshold = 0.0003
     if funding > funding_threshold and is_sup_target and current_price < vwap:
@@ -299,8 +303,8 @@ async def get_technical_indicators(ticker):
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
         funding_fmt = f"{funding_rate*100:+.3f}%"
         
-        # VISUAL IMPROVEMENT: Emojis for Levels
-        def icon(sc): return "🟢" if sc > 3.0 else "🟡" if sc > 0 else "🔴"
+        # VISUAL TUNING: Synchronized Icons (1.5 / 0.5)
+        def icon(sc): return "🟢" if sc >= 1.5 else "🟡" if sc >= 0.5 else "🔴"
         def fmt_lvls(lvls): return " | ".join([f"{icon(l['score'])} ${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
         
         m30_s1 = m30_sup[0]['price'] if m30_sup else df['low'].min()

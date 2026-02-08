@@ -208,13 +208,23 @@ async def get_sniper_analysis(ticker, language="ru"):
     
     from datetime import datetime, timezone
     
+    # 1. Metadata
+    calc_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    
+    # 2. Unpack Indicators
     p_score = indicators['p_score']
     strat = indicators['strategy']
     
-    # Timestamp (Audit Requirement)
-    calc_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    # 3. Determine Sentiment String
+    try:
+        f_val = float(indicators['funding'].strip('%').replace('+',''))
+        sentiment = "Бычье" if f_val > 0.01 else "Медвежье" if f_val < -0.01 else "Нейтральное"
+    except:
+        sentiment = "N/A"
 
-    def fmt(val): return f"${val:.4f}" if isinstance(val, (int, float)) and val > 0 else "N/A"
+    # 4. Format Numbers
+    def fmt(val): 
+        return f"${val:.4f}" if isinstance(val, (int, float)) and val > 0 else "N/A"
     
     entry_str = fmt(strat['entry'])
     stop_str = fmt(strat['stop'])
@@ -222,19 +232,17 @@ async def get_sniper_analysis(ticker, language="ru"):
     tp2_str = fmt(strat['tp2'])
     tp3_str = fmt(strat['tp3'])
     
+    # 5. Dynamic Position Sizing Formatting
     pos_size_val = strat['position_size']
     if pos_size_val > 0:
-        pos_size_str = f"{pos_size_val:.0f}" if strat['entry'] < 1.0 else f"{pos_size_val:.4f}"
+        if isinstance(curr_price, (int, float)) and curr_price < 1.0:
+            pos_size_str = f"{pos_size_val:.0f}"
+        else:
+            pos_size_str = f"{pos_size_val:.4f}"
     else:
         pos_size_str = "0"
 
-    # Funding interpretation
-    try:
-        fund_val = float(indicators['funding'].strip('%').replace('+',''))
-        sentiment = "Бычье" if fund_val > 0.01 else "Медвежье" if fund_val < -0.01 else "Нейтральное"
-    except:
-        sentiment = "N/A"
-
+    # 6. Risk Info Block (Clean HTML)
     risk_info = ""
     if strat['action'] != "WAIT":
         risk_info = (
@@ -244,40 +252,43 @@ async def get_sniper_analysis(ticker, language="ru"):
             f"• <b>RRR:</b> 1:{strat['rrr']:.1f}"
         )
 
-    # M30 SNIPER v2.3.1 PROMPT
+    # 7. M30 SNIPER v2.3.2 FINAL PROMPT
     prompt = f"""
     Ты — Профессиональный Интрадей Трейдер (M30 Sniper).
-    Задача: Дать четкий план.
+    Твоя задача — проанализировать данные и выдать четкий торговый план.
     
-    ВАЖНО: ИСПОЛЬЗУЙ ТОЛЬКО: <b>, <code>, <i>. ЗАМЕНЯЙ СИМВОЛЫ "БОЛЬШЕ/МЕНЬШЕ" НА СЛОВА.
+    ВАЖНО: ИСПОЛЬЗУЙ ТОЛЬКО ПОДДЕРЖИВАЕМЫЕ HTML ТЕГИ: <b>, <code>, <i>.
+    ЗАМЕНЯЙ СИМВОЛЫ "БОЛЬШЕ/МЕНЬШЕ" НА СЛОВА "выше/ниже".
     
     МЕТАДАННЫЕ:
     • Время расчета: {calc_time}
     
-    ДАННЫЕ:
-    • Цена: ${curr_price}
-    • VWAP: {indicators['vwap']}
-    • RSI: {indicators['rsi']}
+    ВХОДНЫЕ ДАННЫЕ:
+    • Цена: ${curr_price} ({change}%)
+    • VWAP (24h): {indicators['vwap']}
+    • RSI (M30): {indicators['rsi']}
     • ATR: {indicators['atr_val']}
     • Regime: {indicators['btc_regime']}
     
     SENTIMENT:
     • Funding: {indicators['funding']} ({sentiment})
     • OI: {indicators['open_interest']}
-    • Bands: {indicators['vol_low']} — {indicators['vol_high']}
+    • Volatility Bands (ATR): {indicators['vol_low']} — {indicators['vol_high']}
     
     УРОВНИ (С ЦВЕТОВОЙ ИНДИКАЦИЕЙ):
-    • RES: {indicators['resistance']}
-    • SUP: {indicators['support']}
+    • RESISTANCE: {indicators['resistance']}
+    • SUPPORT: {indicators['support']}
+    (🟢=Сильный, 🟡=Средний, 🔴=Слабый)
     
     STRATEGY SCORE DECOMPOSITION ({p_score}%):
     {indicators['p_score_details']}
     
-    ПЛАН:
-    • Action: {strat['action']} (Reason: {strat['reason']})
+    ТОРГОВЫЙ ПЛАН (РАССЧИТАН АЛГОРИТМОМ):
+    • Action: {strat['action']}
+    • Reason: {strat['reason']}
     • Entry: {entry_str} | Stop: {stop_str}
     • TPs: {tp1_str} | {tp2_str} | {tp3_str}
-    
+
     СТРУКТУРА ОТВЕТА (HTML):
 
     📊 <b>{ticker.upper()} | M30 SNIPER</b>
@@ -294,25 +305,29 @@ async def get_sniper_analysis(ticker, language="ru"):
     • <b>SUP:</b> {indicators['support']}
 
     1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
-    • <b>Тренд:</b> Цена {'выше' if curr_price > float(indicators['vwap'].replace('$','')) else 'ниже'} VWAP.
+    • <b>Тренд:</b> Цена {'выше' if isinstance(curr_price, (int, float)) and curr_price > float(indicators['vwap'].replace('$','')) else 'ниже'} VWAP.
     • <b>Strategy Score:</b> <b>{p_score}%</b>.
     • <b>Декомпозиция:</b>
-      [Вставь сюда строки из STRATEGY SCORE DECOMPOSITION].
-    • <b>Анализ:</b> [Используй декомпозицию, чтобы объяснить, почему Score именно такой. Например: "Снижен из-за слабых уровней"].
+      [Скопируй сюда пункты из STRATEGY SCORE DECOMPOSITION].
+    • <b>Анализ:</b> [Объясни Score. Если уровни 🔴 или 🟡 — укажи на слабость структуры. Если 🟢 — подтверди силу].
 
     2️⃣ <b>СНАЙПЕРСКИЙ ПЛАН</b>
     🚦 <b>Тип:</b> {strat['action']}
     🚪 <b>Вход:</b> <code>{entry_str}</code>
     🛡 <b>Стоп-лосс:</b> 🔴 <code>{stop_str}</code>
     ✅ <b>Тейк-профиты:</b>
-       🟢 TP1: <code>{tp1_str}</code>
-       🟢 TP2: <code>{tp2_str}</code>
-       🟢 TP3: <code>{tp3_str}</code>
+       🟢 TP1: <code>{tp1_str}</code> (Safe)
+       🟢 TP2: <code>{tp2_str}</code> (Level)
+       🟢 TP3: <code>{tp3_str}</code> (Runner)
 
     {risk_info}
 
     <b>ОБОСНОВАНИЕ:</b>
     {strat['reason']}
+
+    ⚠️ <b>УСЛОВИЯ ВХОДА:</b>
+    • Вход строго лимитным ордером.
+    • Жди закрытия свечи M30 для подтверждения.
     """
 
     client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
