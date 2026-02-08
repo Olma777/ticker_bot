@@ -209,6 +209,7 @@ async def get_sniper_analysis(ticker, language="ru"):
     p_score = indicators['p_score']
     p_score_details = indicators['p_score_details']
     swing = indicators['swing_strat']
+    sniper = indicators['sniper_strat']
     
     # Funding interpretation
     try:
@@ -216,35 +217,34 @@ async def get_sniper_analysis(ticker, language="ru"):
         sentiment = "Бычье" if fund_val > 0.01 else "Медвежье" if fund_val < -0.01 else "Нейтральное"
     except:
         sentiment = "N/A"
-        
-    sniper_action = "WAIT" if p_score < 40 else "TRADE"
-    sniper_reason = "P-Score < 40% (Высокий риск)" if p_score < 40 else "Ищи вход на M30 уровнях (P-Score > 40%)"
 
     # MARKET LENS V2.0 SUPER PROMPT
     prompt = f"""
     Ты — Профессиональный Трейдер (Market Lens Analyst).
     Твоя задача — провести КОМПЛЕКСНЫЙ АНАЛИЗ монеты {ticker.upper()}.
     
+    ВАЖНО: ИСПОЛЬЗУЙ ТОЛЬКО ПОДДЕРЖИВАЕМЫЕ HTML ТЕГИ: <b>, <code>, <i>, <a>.
+    ЗАПРЕЩЕНО ИСПОЛЬЗОВАТЬ: <details>, <summary>, <mark>.
+    
     ВХОДНЫЕ ДАННЫЕ:
     • Цена: ${curr_price} ({indicators['change']}%)
     • Режим Рынка: {indicators['regime']}
     
-    SENTIMENT & VOLUME:
-    • Funding Rate: {indicators['funding']} ({sentiment})
-    • Open Interest: {indicators['open_interest']}
-    • Liquidation Risks: Longs < {indicators['liq_long']} | Shorts > {indicators['liq_short']}
+    SENTIMENT:
+    • Funding: {indicators['funding']} ({sentiment})
+    • OI: {indicators['open_interest']}
+    • Liq Risk: Longs < {indicators['liq_long']} | Shorts > {indicators['liq_short']}
     
-    1️⃣ MACRO CONTEXT (DAILY):
-    • RSI (1D): {indicators['daily_rsi']}
-    • Daily Support: {indicators['daily_sup']}
-    • Daily Resistance: {indicators['daily_res']}
-    • SWING STRATEGY (Algo): {swing['action']} | Reason: {swing['reason']}
+    1️⃣ MACRO (DAILY):
+    • RSI: {indicators['daily_rsi']}
+    • Levels: SUP {indicators['daily_sup']} | RES {indicators['daily_res']}
+    • STRAT: {swing['action']} | R: {swing['reason']} | E: {swing['entry']} | TP: {swing['tp']} | SL: {swing['stop']}
     
-    2️⃣ MICRO CONTEXT (M30 - SNIPER):
-    • RSI (30m): {indicators['m30_rsi']}
-    • M30 Support: {indicators['m30_sup']}
-    • M30 Resistance: {indicators['m30_res']}
+    2️⃣ MICRO (M30):
+    • RSI: {indicators['m30_rsi']}
+    • Levels: SUP {indicators['m30_sup']} | RES {indicators['m30_res']}
     • P-SCORE: {p_score}% ({p_score_details})
+    • STRAT: {sniper['action']} | R: {sniper['reason']} | E: {sniper['entry']} | TP: {sniper['tp']} | SL: {sniper['stop']}
 
     СТРУКТУРА ОТВЕТА (HTML):
 
@@ -275,11 +275,14 @@ async def get_sniper_analysis(ticker, language="ru"):
     <i>Обоснование: {swing['reason']}</i>
 
     🎯 <b>SNIPER (Интрадей M30):</b>
-    🚦 <b>Сигнал:</b> {sniper_action}
-    <i>Обоснование: {sniper_reason}</i>
+    🚦 <b>Сигнал:</b> {sniper['action']}
+    🚪 <b>Вход:</b> <code>{sniper['entry']}</code>
+    🎯 <b>Цель:</b> <code>{sniper['tp']}</code>
+    🛡 <b>Стоп:</b> <code>{sniper['stop']}</code>
+    <i>Обоснование: {sniper['reason']}</i>
     <i>(P-Score {p_score}% - используй M30 уровни для скальпинга, если RSI подтверждает)</i>
 
-    ⚠️ <b>ВНИМАНИЕ:</b> [Предупреждение о ликвидациях или новостях]
+    ⚠️ <b>ВНИМАНИЕ:</b> [Предупреждение о рисках]
     """
 
     client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")

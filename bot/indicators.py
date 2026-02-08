@@ -150,11 +150,10 @@ def process_levels(df, timeframe_scaler=1.0, max_dist_pct=50.0):
     
     for lvl in levels:
         score = lvl.get_score(current_idx)
-        
         # DISTANCE FILTER
         dist_pct = abs(lvl.price - current_price) / current_price * 100
         if dist_pct > max_dist_pct: continue
-
+        
         data = {'price': lvl.price, 'score': score}
         if lvl.is_res and lvl.price > current_price: active_resistances.append(data)
         elif not lvl.is_res and lvl.price < current_price: active_supports.append(data)
@@ -209,6 +208,7 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     return final_score, "\n       • ".join(details), is_support_target
 
 def get_swing_strategy(daily_price, daily_s1, daily_r1, daily_rsi, daily_atr):
+    """ SWING STRATEGY (DAILY) """
     if daily_rsi > 70:
         return "WAIT", "RSI Daily перегрет (>70)", "N/A", "N/A", "N/A"
     if daily_rsi < 30:
@@ -217,14 +217,37 @@ def get_swing_strategy(daily_price, daily_s1, daily_r1, daily_rsi, daily_atr):
     dist_s = abs(daily_price - daily_s1)
     dist_r = abs(daily_price - daily_r1)
     
-    if dist_s < dist_r:
+    if dist_s < dist_r: # Closer to Support
         if daily_rsi < 55:
             return "LONG", "Отскок от Daily Support", f"${daily_s1:.4f}", f"${(daily_s1 - daily_atr):.4f}", f"${daily_r1:.4f}"
-    else:
+    else: # Closer to Resistance
         if daily_rsi > 45:
             return "SHORT", "Отбой от Daily Resistance", f"${daily_r1:.4f}", f"${(daily_r1 + daily_atr):.4f}", f"${daily_s1:.4f}"
             
     return "WAIT", "Цена в середине Daily диапазона", "N/A", "N/A", "N/A"
+
+def get_sniper_strategy(p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target):
+    """ SNIPER STRATEGY (M30) - Returns structured data even if WAIT """
+    
+    # Base strategy calculation regardless of P-Score
+    stop_buffer = m30_atr * 1.5
+    
+    if is_sup_target: # Potential LONG
+        action = "LONG"
+        entry = m30_s1
+        stop = m30_s1 - stop_buffer
+        tp = m30_r1
+    else: # Potential SHORT
+        action = "SHORT"
+        entry = m30_r1
+        stop = m30_r1 + stop_buffer
+        tp = m30_s1
+        
+    # Decision Logic
+    if p_score < 40:
+        return "WAIT", f"P-Score {p_score}% слишком низкий", "N/A", "N/A", "N/A"
+        
+    return action, f"P-Score {p_score}% > 40%, вход от уровня", f"${entry:.4f}", f"${stop:.4f}", f"${tp:.4f}"
 
 async def get_technical_indicators(ticker):
     exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
@@ -243,13 +266,11 @@ async def get_technical_indicators(ticker):
 
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
-        
         daily_df['atr'] = calculate_atr(daily_df)
         daily_df['rsi'] = calculate_rsi(daily_df)
-        
         regime, safety = calculate_global_regime(btc_df)
         
-        # Levels with DISTANCE FILTER (20% for Daily)
+        # Levels with DISTANCE FILTER (20% for Daily to avoid noise)
         m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
         daily_sup, daily_res = process_levels(daily_df, timeframe_scaler=2.0, max_dist_pct=20.0)
         
@@ -257,10 +278,8 @@ async def get_technical_indicators(ticker):
         daily_price = daily_df['close'].iloc[-1]
         daily_atr = daily_df['atr'].iloc[-1]
         m30_atr = df['atr'].iloc[-1]
-        
         m30_rsi = df['rsi'].iloc[-1]
         daily_rsi = daily_df['rsi'].iloc[-1]
-        
         liq_long, liq_short = estimate_liquidation_levels(current_price, m30_atr)
         
         price_24h = df['close'].iloc[-49] if len(df) >= 49 else df['open'].iloc[0]
@@ -280,8 +299,13 @@ async def get_technical_indicators(ticker):
             regime, m30_rsi, m30_s1_score, m30_r1_score, current_price, m30_s1, m30_r1
         )
         
+        # Strategies
         swing_action, swing_reason, swing_entry, swing_stop, swing_tp = get_swing_strategy(
             daily_price, daily_s1, daily_r1, daily_rsi, daily_atr
+        )
+        
+        sniper_action, sniper_reason, sniper_entry, sniper_stop, sniper_tp = get_sniper_strategy(
+            p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target
         )
 
         return {
@@ -301,11 +325,10 @@ async def get_technical_indicators(ticker):
             "p_score": p_score,
             "p_score_details": p_score_details,
             "swing_strat": {
-                "action": swing_action,
-                "reason": swing_reason,
-                "entry": swing_entry,
-                "stop": swing_stop,
-                "tp": swing_tp
+                "action": swing_action, "reason": swing_reason, "entry": swing_entry, "stop": swing_stop, "tp": swing_tp
+            },
+            "sniper_strat": {
+                "action": sniper_action, "reason": sniper_reason, "entry": sniper_entry, "stop": sniper_stop, "tp": sniper_tp
             }
         }
     finally:
