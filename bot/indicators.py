@@ -6,11 +6,11 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
-# --- SETTINGS ---
+# --- SETTINGS v2.3 STABLE ---
 SETTINGS = {
     'timeframe': '30m', 
-    'reactBars': 24,    
-    'kReact': 1.3,
+    'reactBars': 12,    
+    'kReact': 1.0,      
     'mergeATR': 0.6,
     'Wt': 1.0,          
     'Wa': 0.35,         
@@ -19,7 +19,10 @@ SETTINGS = {
     'maxDistPct': 50.0, 
     'atrLen': 14,
     'zWin': 180,        
-    'zThr': 1.25
+    'zThr': 1.25,
+    # Defaults (can be overridden)
+    'default_capital': 1000.0, 
+    'default_risk_pct': 1.0
 }
 
 class Level:
@@ -82,7 +85,6 @@ def calculate_rsi(df, period=14):
     return 100 - (100 / (1 + rs))
 
 def calculate_vwap_24h(df):
-    """Calculates Volume Weighted Average Price for the last 24h (approx 48 candles of 30m)"""
     if len(df) < 48:
         return df['close'].mean()
     last_24h = df.tail(48)
@@ -90,32 +92,42 @@ def calculate_vwap_24h(df):
     return vwap
 
 def calculate_global_regime(btc_df):
-    if btc_df is None or len(btc_df) < SETTINGS['zWin']: return "NEUTRAL", "SAFE"
+    if btc_df is None or btc_df.empty or len(btc_df) < SETTINGS['zWin']: 
+        return "NEUTRAL", "SAFE"
+        
     roc = btc_df['close'].pct_change(30)
+    if roc.isna().all(): return "NEUTRAL", "SAFE"
+    
     mean = roc.rolling(window=SETTINGS['zWin']).mean()
     std = roc.rolling(window=SETTINGS['zWin']).std()
+    
     if std.iloc[-1] == 0 or pd.isna(std.iloc[-1]): return "NEUTRAL", "SAFE"
     z_score = (roc - mean) / std
     current_z = z_score.iloc[-1]
+    
     if pd.isna(current_z): return "NEUTRAL", "SAFE"
-    if current_z > SETTINGS['zThr']: regime = "COMPRESSION"
-    elif current_z < -SETTINGS['zThr']: regime = "EXPANSION"
-    else: regime = "NEUTRAL"
-    safety = "RISKY" if regime == "COMPRESSION" else "SAFE"
-    return regime, safety
+    
+    if current_z > SETTINGS['zThr']: 
+        return "COMPRESSION", "RISKY"
+    elif current_z < -SETTINGS['zThr']: 
+        return "EXPANSION", "SAFE"
+    else: 
+        return "NEUTRAL", "SAFE"
 
 def process_levels(df, max_dist_pct=30.0):
     levels = []
     pending = []
+    if 'atr' not in df.columns: df['atr'] = calculate_atr(df)
     atr = df['atr'].values
     high = df['high'].values
     low = df['low'].values
-    close = df['close'].values
     
     L, R = 4, 4 
     start_idx = max(SETTINGS['atrLen'], L + R)
     
     for i in range(start_idx, len(df) - R):
+        if np.isnan(atr[i]): continue
+        
         is_pivot_h = True
         is_pivot_l = True
         for j in range(1, L + 1):
@@ -151,7 +163,7 @@ def process_levels(df, max_dist_pct=30.0):
         pending = active_pending
 
     current_idx = len(df) - 1
-    current_price = close[-1]
+    current_price = df['close'].iloc[-1]
     active_supports = []
     active_resistances = []
     
@@ -165,14 +177,9 @@ def process_levels(df, max_dist_pct=30.0):
     
     active_supports.sort(key=lambda x: abs(x['price'] - current_price))
     active_resistances.sort(key=lambda x: abs(x['price'] - current_price))
-    
     return active_supports[:3], active_resistances[:3]
 
 def calculate_volatility_bands(current_price, atr):
-    """
-    Calculates statistical volatility extremes (2.0 ATR).
-    Renamed from 'estimate_liquidation_levels' to be accurate.
-    """
     vol_low = current_price - (atr * 2.0) 
     vol_high = current_price + (atr * 2.0)
     return vol_low, vol_high
@@ -184,9 +191,11 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     if regime == "EXPANSION": 
         score += 10
         details.append("Режим: +10% (EXPANSION)")
-    elif regime in ["COMPRESSION", "NEUTRAL"]: 
+    elif regime == "COMPRESSION": 
         score -= 10
         details.append(f"Режим: -10% ({regime})")
+    else:
+        details.append("Режим: 0% (NEUTRAL)")
     
     dist_s1 = abs(current_price - s1)
     dist_r1 = abs(current_price - r1)
@@ -216,39 +225,35 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     final_score = max(0, min(100, int(score)))
     return final_score, "\n       • ".join(details), is_support_target
 
-def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rsi, funding, vwap):
+def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rsi, funding, vwap, capital=1000.0, risk_percent=1.0):
     """
-    SMART STRATEGY with VWAP + SENTIMENT FILTER (v2.1 Honest Engineer)
+    COMPLETE INTRADAY STRATEGY LOGIC WITH RISK MANAGEMENT (v2.3 STABLE)
     """
-    # 1. P-Score Filter (Noise Protection)
-    if p_score < 40:
+    def empty_response(reason):
         return {
-            "action": "WAIT",
-            "reason": f"Strategy Score {p_score}% низкий. Высокий риск шума.",
-            "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A"
+            "action": "WAIT", "reason": reason,
+            "entry": 0, "stop": 0, "tp1": 0, "tp2": 0, "tp3": 0,
+            "risk_pct": 0, "position_size": 0, "risk_amount": 0, "rrr": 0
         }
 
-    # 2. RSI Extreme Protection
+    # 1. P-Score Filter
+    if p_score < 40:
+        return empty_response(f"Strategy Score {p_score}% низкий. Рынок без четкой структуры.")
+
+    # 2. RSI Guard
     if is_sup_target and rsi > 65:
-         return { "action": "WAIT", "reason": "Цена у поддержки, но RSI > 65 (падающий нож).", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
+         return empty_response("RSI > 65 у поддержки (падающий нож).")
     if not is_sup_target and rsi < 35:
-         return { "action": "WAIT", "reason": "Цена у сопротивления, но RSI < 35 (шорт дна).", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
+         return empty_response("RSI < 35 у сопротивления (шорт дна).")
 
-    # 3. SMART SENTIMENT FILTER
-    # FIX: Threshold 0.03% -> 0.0003 (Binance API uses decimals)
-    funding_threshold = 0.0003 
-    
-    # LONG Trap Check: High funding (Crowd Longs) BUT Price < VWAP (No trend support)
-    if funding > funding_threshold: 
-        if is_sup_target and current_price < vwap: 
-             return { "action": "WAIT", "reason": f"Фандинг перегрет ({funding*100:.3f}%) при цене ниже VWAP. Риск лонговой ловушки.", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
-    
-    # SHORT Squeeze Check: Negative funding (Crowd Shorts) BUT Price > VWAP (Strong trend)
-    if funding < -funding_threshold: 
-        if not is_sup_target and current_price > vwap: 
-             return { "action": "WAIT", "reason": f"Фандинг отрицательный ({funding*100:.3f}%) при цене выше VWAP. Риск шортового сквиза.", "entry": "N/A", "stop": "N/A", "tp1": "N/A", "tp2": "N/A", "tp3": "N/A" }
+    # 3. Sentiment Gate (0.03% threshold)
+    funding_threshold = 0.0003
+    if funding > funding_threshold and is_sup_target and current_price < vwap:
+        return empty_response(f"Лонговая ловушка: фандинг перегрет ({(funding*100):.3f}%), цена ниже VWAP.")
+    if funding < -funding_threshold and not is_sup_target and current_price > vwap:
+        return empty_response(f"Шортовый сквиз: фандинг отрицательный ({(funding*100):.3f}%), цена выше VWAP.")
 
-    # Strategy Construction
+    # 4. Trade Construction
     stop_buffer = atr * 1.5
     
     if is_sup_target:
@@ -268,14 +273,30 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
         tp2 = entry - (dist * 0.6)
         tp3 = s1 + (atr * 0.2)
 
+    # 5. Risk Management Calculation (with Zero Division Protection)
+    risk_amount_usd = capital * (risk_percent / 100.0)
+    price_diff = abs(entry - stop)
+    
+    if price_diff > 0 and entry > 0:
+        position_size = risk_amount_usd / price_diff
+        risk_pct_distance = (price_diff / entry) * 100
+        potential_profit = abs(tp3 - entry)
+        rrr = potential_profit / price_diff
+    else:
+        position_size = 0
+        risk_pct_distance = 0
+        rrr = 0
+
     return {
         "action": action,
-        "reason": f"Вход от уровня с подтверждением Strategy Score ({p_score}%). VWAP/Funding фильтр пройден.",
-        "entry": f"${entry:.4f}",
-        "stop": f"${stop:.4f}",
-        "tp1": f"${tp1:.4f}",
-        "tp2": f"${tp2:.4f}",
-        "tp3": f"${tp3:.4f}"
+        "reason": f"Вход от уровня. Score: {p_score}%. RRR: 1:{rrr:.1f}",
+        "entry": entry,
+        "stop": stop,
+        "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "risk_pct": round(risk_pct_distance, 2),
+        "position_size": position_size, # Returning float, rounding in formatting
+        "risk_amount": round(risk_amount_usd, 2),
+        "rrr": round(rrr, 1)
     }
 
 async def get_technical_indicators(ticker):
@@ -303,11 +324,12 @@ async def get_technical_indicators(ticker):
         m30_rsi = df['rsi'].iloc[-1]
         vwap_24h = calculate_vwap_24h(df)
         
-        # Volatility Bands (ex. Liquidation Zones)
         vol_low, vol_high = calculate_volatility_bands(current_price, m30_atr)
         
-        price_24h = df['close'].iloc[-49] if len(df) >= 49 else df['open'].iloc[0]
+        price_24h = df['close'].iloc[-47] if len(df) >= 47 else df['open'].iloc[0]
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
+        
+        funding_fmt = f"{funding_rate*100:+.3f}%"
         
         def fmt_lvls(lvls): return " | ".join([f"${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
         
@@ -320,9 +342,9 @@ async def get_technical_indicators(ticker):
             regime, m30_rsi, m30_s1_score, m30_r1_score, current_price, m30_s1, m30_r1
         )
         
-        # Strategy with Smart Filter
         strat = get_intraday_strategy(
-            p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target, m30_rsi, funding_rate, vwap_24h
+            p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target, m30_rsi, funding_rate, vwap_24h,
+            capital=SETTINGS['default_capital'], risk_percent=SETTINGS['default_risk_pct']
         )
 
         return {
@@ -330,7 +352,9 @@ async def get_technical_indicators(ticker):
             "change": change_str,
             "rsi": round(m30_rsi, 1),
             "regime": regime,
-            "funding": f"{funding_rate:.4f}%",
+            "btc_regime": f"{regime} ({safety})",
+            "atr_val": f"${m30_atr:.4f}",
+            "funding": funding_fmt,
             "open_interest": f"${open_interest:,.0f}" if open_interest else "N/A",
             "support": fmt_lvls(m30_sup),
             "resistance": fmt_lvls(m30_res),

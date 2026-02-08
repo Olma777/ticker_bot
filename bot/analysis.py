@@ -207,83 +207,106 @@ async def get_sniper_analysis(ticker, language="ru"):
     change = indicators['change']
     
     p_score = indicators['p_score']
-    p_score_details = indicators['p_score_details']
     strat = indicators['strategy']
     
+    def fmt(val): return f"${val:.4f}" if isinstance(val, (int, float)) and val > 0 else "N/A"
+    
+    entry_str = fmt(strat['entry'])
+    stop_str = fmt(strat['stop'])
+    tp1_str = fmt(strat['tp1'])
+    tp2_str = fmt(strat['tp2'])
+    tp3_str = fmt(strat['tp3'])
+    
+    # Dynamic Position Sizing Formatting (Audit Requirement)
+    pos_size_val = strat['position_size']
+    if pos_size_val > 0:
+        if strat['entry'] < 1.0: # Cheap coins (e.g. PEPE)
+            pos_size_str = f"{pos_size_val:.0f}"
+        else:
+            pos_size_str = f"{pos_size_val:.4f}"
+    else:
+        pos_size_str = "0"
+
     # Funding interpretation
     try:
-        fund_val = float(indicators['funding'].strip('%'))
+        fund_val = float(indicators['funding'].strip('%').replace('+',''))
         sentiment = "Бычье" if fund_val > 0.01 else "Медвежье" if fund_val < -0.01 else "Нейтральное"
     except:
         sentiment = "N/A"
 
-    # M30 SNIPER v2.1 PROMPT
+    # Risk Info - Clean HTML
+    risk_info = ""
+    if strat['action'] != "WAIT":
+        risk_info = (
+            f"🛡 <b>RISK MANAGEMENT (Cap $1000, Risk 1%):</b>\n"
+            f"• <b>Stop Loss:</b> {strat['risk_pct']:.2f}% дистанция.\n"
+            f"• <b>Position Size:</b> {pos_size_str} монет (${strat['risk_amount']} риска).\n"
+            f"• <b>RRR:</b> 1:{strat['rrr']:.1f}"
+        )
+
+    # M30 SNIPER v2.3 STABLE PROMPT
     prompt = f"""
     Ты — Профессиональный Интрадей Трейдер (M30 Sniper).
-    Твоя задача — дать ОДИН четкий торговый план на основе данных.
+    Задача: Дать четкий план.
     
-    ВАЖНО:
-    1. ИСПОЛЬЗУЙ ТОЛЬКО ПОДДЕРЖИВАЕМЫЕ HTML ТЕГИ: <b>, <code>, <i>.
-    2. ЗАМЕНЯЙ СИМВОЛЫ "БОЛЬШЕ/МЕНЬШЕ" НА СЛОВА "выше/ниже".
+    ВАЖНО: ИСПОЛЬЗУЙ ТОЛЬКО: <b>, <code>, <i>. ЗАМЕНЯЙ СИМВОЛЫ "БОЛЬШЕ/МЕНЬШЕ" НА СЛОВА.
     
-    ВХОДНЫЕ ДАННЫЕ:
-    • Цена: ${curr_price} ({indicators['change']}%)
-    • VWAP (24h): {indicators['vwap']}
-    • RSI (M30): {indicators['rsi']}
+    ДАННЫЕ:
+    • Цена: ${curr_price}
+    • VWAP: {indicators['vwap']}
+    • RSI: {indicators['rsi']}
+    • ATR: {indicators['atr_val']}
+    • Regime: {indicators['btc_regime']}
     
-    SENTIMENT (MULTITOOL):
+    SENTIMENT:
     • Funding: {indicators['funding']} ({sentiment})
-    • Open Interest: {indicators['open_interest']}
-    • Volatility Bands (ATR): Low {indicators['vol_low']} | High {indicators['vol_high']}
+    • OI: {indicators['open_interest']}
+    • Bands: {indicators['vol_low']} — {indicators['vol_high']}
     
-    КЛЮЧЕВЫЕ УРОВНИ (M30):
-    • RESISTANCE: {indicators['resistance']}
-    • SUPPORT: {indicators['support']}
+    УРОВНИ:
+    • RES: {indicators['resistance']}
+    • SUP: {indicators['support']}
     
-    STRATEGY SCORE (ЭКСПЕРТНАЯ ОЦЕНКА): {p_score}%
+    STRATEGY SCORE: {p_score}%
     {indicators['p_score_details']}
     
-    ТОРГОВЫЙ ПЛАН (SMART FILTERED):
-    • Action: {strat['action']}
-    • Reason: {strat['reason']}
-    • Entry: {strat['entry']}
-    • Stop: {strat['stop']}
-    • TP1: {strat['tp1']} | TP2: {strat['tp2']} | TP3: {strat['tp3']}
-
+    ПЛАН:
+    • Action: {strat['action']} (Reason: {strat['reason']})
+    • Entry: {entry_str} | Stop: {stop_str}
+    • TPs: {tp1_str} | {tp2_str} | {tp3_str}
+    
     СТРУКТУРА ОТВЕТА (HTML):
 
     📊 <b>{ticker.upper()} | M30 SNIPER</b>
     💰 Цена: <code>${curr_price}</code> ({change}%)
 
-    📡 <b>MARKET CONTEXT (SENTIMENT):</b>
-    • <b>RSI:</b> {indicators['rsi']} ({'Перегрет' if indicators['rsi'] > 65 else 'Перепродан' if indicators['rsi'] < 35 else 'Нейтрально'}).
-    • <b>Funding:</b> {indicators['funding']} ({sentiment}).
-    • <b>Volatility Bands (ATR):</b> Статистический диапазон движения: {indicators['vol_low']} — {indicators['vol_high']}.
+    📡 <b>MARKET CONTEXT:</b>
+    • <b>RSI:</b> {indicators['rsi']}. <b>Regime:</b> {indicators['btc_regime']}.
+    • <b>Sentiment:</b> Funding {indicators['funding']} | OI {indicators['open_interest']}.
+    • <b>Volatility:</b> ATR {indicators['atr_val']}. Bands: {indicators['vol_low']} — {indicators['vol_high']}.
 
-    🎯 <b>КЛЮЧЕВЫЕ ЗОНЫ (M30):</b>
+    🎯 <b>ЗОНЫ (M30):</b>
     • <b>RES:</b> {indicators['resistance']}
     • <b>SUP:</b> {indicators['support']}
 
     1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
-    • <b>Тренд:</b> Цена {'выше' if curr_price > float(indicators['vwap'].replace('$','')) else 'ниже'} VWAP ({indicators['vwap']}).
-    • <b>Strategy Score:</b> <b>{p_score}%</b> ({'Высокий' if p_score > 60 else 'Средний' if p_score > 40 else 'Низкий'}).
-    • <b>Анализ:</b> [Почему алгоритм выбрал {strat['action']}?].
+    • <b>Тренд:</b> Цена {'выше' if curr_price > float(indicators['vwap'].replace('$','')) else 'ниже'} VWAP.
+    • <b>Strategy Score:</b> <b>{p_score}%</b>.
+    • <b>Анализ:</b> [Опиши контекст].
 
     2️⃣ <b>СНАЙПЕРСКИЙ ПЛАН</b>
     🚦 <b>Тип:</b> {strat['action']}
-    🚪 <b>Вход:</b> <code>{strat['entry']}</code>
-    🛡 <b>Стоп-лосс:</b> 🔴 <code>{strat['stop']}</code>
+    🚪 <b>Вход:</b> <code>{entry_str}</code>
+    🛡 <b>Стоп-лосс:</b> 🔴 <code>{stop_str}</code>
     ✅ <b>Тейк-профиты:</b>
-       🟢 TP1: <code>{strat['tp1']}</code> (Safe)
-       🟢 TP2: <code>{strat['tp2']}</code> (Level)
-       🟢 TP3: <code>{strat['tp3']}</code> (Runner)
+       🟢 TP1: <code>{tp1_str}</code>
+       🟢 TP2: <code>{tp2_str}</code>
+       🟢 TP3: <code>{tp3_str}</code>
+
+    {risk_info}
 
     <b>ОБОСНОВАНИЕ:</b>
     {strat['reason']}
-
-    ⚠️ <b>УСЛОВИЯ ВХОДА:</b>
-    • Вход строго лимитным ордером.
-    • Жди закрытия свечи M30 для подтверждения.
     """
 
     client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
