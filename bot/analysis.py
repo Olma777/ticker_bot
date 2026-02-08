@@ -190,111 +190,89 @@ async def analyze_token_fundamentals(ticker):
     except Exception as e:
         return f"⚠️ Ошибка аудита: {e}"
 
-# --- 3. SNIPER (FINAL VERSION) ---
+# --- 3. SNIPER (MARKET LENS V2.0 - TRUE MULTITOOL) ---
 async def get_sniper_analysis(ticker, language="ru"):
     # 1. Получаем данные цены
     price_data, error = await get_crypto_price(ticker)
     if not price_data:
         return f"⚠️ Не удалось найти {ticker}."
 
-    # 2. Получаем индикаторы (MATH)
+    # 2. Получаем индикаторы (TRUE MULTITOOL DATA)
     indicators = await get_technical_indicators(ticker)
     if not indicators:
-        indicators = {
-            "rsi": "N/A", "trend": "UNKNOWN", 
-            "s1": "N/A", "r1": "N/A", 
-            "s1_score": 0.0, "r1_score": 0.0,
-            "regime": "N/A", "safety": "N/A",
-            "supports_list": "Нет уровней",
-            "resistances_list": "Нет уровней"
-        }
+        return f"⚠️ Ошибка получения индикаторов для {ticker}."
 
     # Данные для AI
-    curr_price = price_data.get('price', 'N/A')
-    source = price_data.get('source', 'Unknown')
-    change = price_data.get('change_24h', 'N/A')
+    curr_price = indicators['price']
+    change = indicators['change']
     
     p_score = indicators['p_score']
     p_score_details = indicators['p_score_details']
-    strat = indicators['strategy']
-    change = indicators.get('change', 'N/A')
+    swing = indicators['swing_strat']
     
-    warning_html = "⚠️ <b>ВНИМАНИЕ:</b> Низкий P-Score!" if p_score < 40 else ""
-    p_score_color = '🟢 ВЫСОКАЯ' if p_score >= 60 else '🟡 СРЕДНЯЯ' if p_score >= 40 else '🔴 НИЗКАЯ'
+    # Funding interpretation
+    try:
+        fund_val = float(indicators['funding'].strip('%'))
+        sentiment = "Бычье" if fund_val > 0.01 else "Медвежье" if fund_val < -0.01 else "Нейтральное"
+    except:
+        sentiment = "N/A"
 
-    # ФИНАЛЬНЫЙ ПРОМТ (PERFECT UI)
+    # MARKET LENS V2.0 SUPER PROMPT
     prompt = f"""
-    Ты — профессиональный аналитик Liquidity Hunter (Smart Money).
-    ТАЙМФРЕЙМ: 30 минут (Intraday).
-
-    ВХОДНЫЕ ДАННЫЕ:
-    • Актив: {ticker.upper()} | Цена: ${curr_price}
-    • RSI (14): {indicators['rsi']} | Тренд: {indicators['trend']}
-    • Режим: {indicators['regime']}
-    • P-SCORE: {p_score}%
+    Ты — Профессиональный Трейдер (Market Lens Analyst).
+    Твоя задача — провести КОМПЛЕКСНЫЙ АНАЛИЗ монеты {ticker.upper()}.
     
-    СТРАТЕГИЯ (ЖЕСТКАЯ РЕКОМЕНДАЦИЯ АЛГОРИТМА):
-    • ДЕЙСТВИЕ: {strat['action']}
-    • ВХОД: {strat['entry']}
-    • СТОП: {strat['stop']}
-    • ТЕЙКИ: {strat['tp1']} / {strat['tp2']}
-    • ЛОГИКА: {strat['reason']}
+    ВХОДНЫЕ ДАННЫЕ:
+    • Цена: ${curr_price} ({change}%)
+    • Режим Рынка: {indicators['regime']}
+    
+    SENTIMENT & VOLUME:
+    • Funding Rate: {indicators['funding']} ({sentiment})
+    • Open Interest: {indicators['open_interest']} (Следи за ростом OI при тренде)
+    • Est. Liquidation Zones: Longs < {indicators['liq_long']} | Shorts > {indicators['liq_short']}
+    
+    1️⃣ MACRO CONTEXT (DAILY):
+    • RSI (1D): {indicators['daily_rsi']}
+    • Daily Support: {indicators['daily_sup']}
+    • Daily Resistance: {indicators['daily_res']}
+    • SWING STRATEGY (Algo): {swing['action']} | Entry: {swing['entry']} | TP: {swing['tp']} | Stop: {swing['stop']}
+    
+    2️⃣ MICRO CONTEXT (M30 - SNIPER):
+    • RSI (30m): {indicators['m30_rsi']}
+    • M30 Support: {indicators['m30_sup']}
+    • M30 Resistance: {indicators['m30_res']}
+    • P-SCORE (Вероятность импульса M30): {p_score}%
+      {p_score_details}
 
-    ОПРЕДЕЛЕНИЕ ФАЗЫ РЫНКА:
-    • НАКОПЛЕНИЕ: Цена внизу диапазона, RSI < 50, покупки на поддержке.
-    • РАСПРЕДЕЛЕНИЕ: Цена вверху диапазона, RSI > 50, продажи на сопротивлении.
-    • ТРЕНД: Четкое движение с закрытием за пределами уровней.
+    СТРУКТУРА ОТВЕТА (HTML):
 
-    ВСЕ ВИДИМЫЕ УРОВНИ:
-    • Поддержки (SUP): {indicators['supports_list']}
-    • Сопротивления (RES): {indicators['resistances_list']}
-
-    АНАЛИЗИРУЙ ПО ЭТОЙ СТРУКТУРЕ (ИСПОЛЬЗУЙ HTML ТЕГИ <b>, <code>):
-
-    📊 <b>{ticker.upper()} | Liquidity Hunter (M30)</b>
+    📊 <b>{ticker.upper()} | MARKET LENS</b>
     💰 Цена: <code>${curr_price}</code> ({change}%)
 
-    🎯 <b>КЛЮЧЕВЫЕ ЗОНЫ:</b>
-    • <b>SUP:</b> {indicators['supports_list']}
-    • <b>RES:</b> {indicators['resistances_list']}
+    1️⃣ <b>MACRO (1D) - СРЕДНЕСРОЧНЫЙ КОНТЕКСТ</b>
+    • <b>Структура:</b> [Опиши Daily тренд и RSI].
+    • <b>Ключевые зоны:</b> {indicators['daily_sup']} (SUP) / {indicators['daily_res']} (RES).
+    • <b>Sentiment:</b> Фандинг {indicators['funding']} и OI {indicators['open_interest']} указывают на [настроение].
 
-    📡 <b>MARKET CONTEXT:</b>
-    • RSI: <b>{indicators['rsi']}</b> ({'🔥 ПЕРЕКУПЛЕН!' if indicators['rsi'] > 65 else '❄️ ПЕРЕПРОДАН!' if indicators['rsi'] < 35 else 'Нейтрально'})
-    • Режим: <b>{indicators['regime']}</b>
-    • Тренд: <b>{indicators['trend']}</b>
+    2️⃣ <b>MICRO (M30) - ИНТРАДЕЙ СИТУАЦИЯ</b>
+    • <b>Уровни M30:</b> Цена зажата между {indicators['m30_sup']} и {indicators['m30_res']}.
+    • <b>P-Score:</b> <b>{p_score}%</b> ({'Высокий' if p_score > 60 else 'Средний' if p_score > 40 else 'Низкий'}).
+    • <b>Ликвидность:</b> Риск сквиза лонгов ниже {indicators['liq_long']}.
 
-    1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
-    ▪️ <b>Фаза:</b> [Определи по правилам выше]
-    ▪️ <b>Анализ:</b> [1) Где цена относительно уровней? 2) Что говорит RSI? 3) Почему P-Score {p_score}%?]
-
-    2️⃣ <b>P-SCORE (ВЕРОЯТНОСТЬ)</b>
-    ▪️ <b>P-Score:</b> <b>{p_score}%</b> ({p_score_color})
-       • {p_score_details}
-
-    🎯 <b>СНАЙПЕРСКИЙ ПЛАН</b>
-    🚦 <b>Тип:</b> {strat['action']}
-    🚪 <b>Вход:</b> <code>{strat['entry']}</code>
-
-    🛡 <b>Стоп-лосс:</b>
-       🔴 <code>{strat['stop']}</code>
-
-    ✅ <b>Тейк-профиты:</b>
-       🟢 TP1: <code>{strat['tp1']}</code>
-       🟢 TP2: <code>{strat['tp2']}</code>
-       
-    <b>ОБОСНОВАНИЕ РЕШЕНИЯ:</b>
-    1. <b>Алгоритмическое:</b> {strat['reason']}
-    2. <b>Техническое:</b> [Анализ RSI и структуры уровней]
-    3. <b>Риск-менеджмент:</b> [Оценка риска сделки]
-
-    <b>ПОТЕНЦИАЛЬНЫЕ СЦЕНАРИИ:</b>
-    1. <b>Основной:</b> [Что ожидаем по стратегии?]
-    2. <b>Альтернативный:</b> [Что если цена пойдет против?]
-    3. <b>Управление:</b> [Как действовать после входа?]
-
-    <b>ЗАКЛЮЧЕНИЕ:</b> [Краткий итог]
+    3️⃣ <b>ТОРГОВЫЕ СТРАТЕГИИ</b>
     
-    {warning_html}
+    🌊 <b>SWING (Среднесрок):</b>
+    🚦 <b>Сигнал:</b> {swing['action']}
+    🚪 <b>Вход:</b> <code>{swing['entry']}</code>
+    🎯 <b>Цель:</b> <code>{swing['tp']}</code>
+    🛡 <b>Стоп:</b> <code>{swing['stop']}</code>
+    <i>Обоснование: {swing['reason']}</i>
+
+    🎯 <b>SNIPER (Интрадей M30):</b>
+    🚦 <b>Сигнал:</b> {'WAIT (Низкий P-Score)' if p_score < 40 else 'Ищи вход на M30 уровнях'}
+    <i>(P-Score {p_score}% - используй M30 уровни для скальпинга, если RSI подтверждает)</i>
+
+    ⚠️ <b>ВНИМАНИЕ:</b> [Предупреждение о ликвидациях или новостях]
     """
 
     client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
