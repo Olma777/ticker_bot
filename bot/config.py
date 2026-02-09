@@ -1,14 +1,22 @@
 import os
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# --- PATHS (for db.py compatibility) ---
+BOT_DIR = Path(__file__).parent
+DATA_DIR = BOT_DIR / "data"
+DB_PATH = DATA_DIR / "users.db"
+
 
 class Config:
     # --- INFRASTRUCTURE ---
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     DATABASE_URL = "market_lens.db"
 
     # --- STRATEGY CONSTANTS (STRICTLY SYNCED WITH PINE v3.7) ---
@@ -29,7 +37,6 @@ class Config:
     def validate(cls):
         """Security check. Called via Server Lifespan."""
         if not cls.WEBHOOK_SECRET or cls.WEBHOOK_SECRET == "change_me_in_prod":
-            # Using print/sys.exit here ensures logs capture it before crash
             print("CRITICAL: WEBHOOK_SECRET is missing or default. Exiting.")
             sys.exit(1)
         if not cls.TELEGRAM_TOKEN or not cls.TELEGRAM_CHAT_ID:
