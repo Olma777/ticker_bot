@@ -1,186 +1,261 @@
+"""
+Technical indicators module with centralized configuration.
+"""
+
+import logging
+import asyncio
+from typing import Optional, Any
+from dataclasses import dataclass
+
 import ccxt.async_support as ccxt
 import pandas as pd
 import numpy as np
-import logging
-import asyncio
+
+from bot.config import TRADING, EXCHANGE_OPTIONS
 
 logger = logging.getLogger(__name__)
 
-# --- SETTINGS v2.3.3 patched ---
-SETTINGS = {
-    'timeframe': '30m', 
-    'reactBars': 24,    
-    'kReact': 1.0,      
-    'mergeATR': 0.6,
-    'Wt': 1.0,          
-    'Wa': 0.15,         # Keep low decay
-    'Tmin': 5,          
-    'scMin': -100.0,    
-    'maxDistPct': 50.0, 
-    'atrLen': 14,
-    'zWin': 180,        
-    'zThr': 1.25,
-    'default_capital': 1000.0, 
-    'default_risk_pct': 1.0
-}
 
+@dataclass
 class Level:
-    def __init__(self, price, is_res, atr, created_at):
-        self.price = price
-        self.is_res = is_res
-        self.atr = atr
-        self.touches = 1
-        self.last_touch_idx = created_at
-        self.created_at = created_at
+    """Represents a support/resistance level."""
+    price: float
+    is_res: bool
+    atr: float
+    touches: int
+    last_touch_idx: int
+    created_at: int
 
-    def update(self, price, atr, idx):
+    def update(self, price: float, atr: float, idx: int) -> None:
+        """Update level with a new touch."""
         old_touches = self.touches
         new_touches = old_touches + 1
         self.price = (self.price * old_touches + price) / new_touches
-        self.atr = (self.atr * old_touches + atr) / new_touches 
+        self.atr = (self.atr * old_touches + atr) / new_touches
         self.touches = new_touches
         self.last_touch_idx = idx
 
-    def get_score(self, current_idx, current_price=None):
+    def get_score(self, current_idx: int, current_price: Optional[float] = None) -> float:
+        """Calculate level score based on touches and age."""
         age = current_idx - self.last_touch_idx
         if current_price is not None:
             dist_pct = abs(self.price - current_price) / current_price * 100
             if dist_pct < 1.0:
-                age = age * 0.5 
-        return (self.touches * SETTINGS['Wt']) - (age * SETTINGS['Wa'])
+                age = age * 0.5
+        return (self.touches * TRADING.wt) - (age * TRADING.wa)
 
-async def fetch_ohlcv_data(exchange, symbol, timeframe, limit=1500):
+
+async def fetch_ohlcv_data(
+    exchange: ccxt.Exchange, 
+    symbol: str, 
+    timeframe: str, 
+    limit: int = 1500
+) -> Optional[pd.DataFrame]:
+    """Fetch OHLCV data from exchange."""
     try:
         ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        if not ohlcv: return None
+        if not ohlcv:
+            return None
         df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
         return df
     except Exception as e:
         logger.error(f"Error fetching {symbol} {timeframe}: {e}")
         return None
 
-async def fetch_funding_rate(exchange, symbol):
+
+async def fetch_funding_rate(exchange: ccxt.Exchange, symbol: str) -> float:
+    """Fetch funding rate for a symbol."""
     try:
         funding = await exchange.fetch_funding_rate(symbol)
         return funding['fundingRate'] if funding else 0.0
     except Exception:
         return 0.0
 
-async def fetch_open_interest(exchange, symbol):
+
+async def fetch_open_interest(exchange: ccxt.Exchange, symbol: str) -> float:
+    """Fetch open interest for a symbol."""
     try:
         oi = await exchange.fetch_open_interest(symbol)
         return oi['openInterestAmount'] if oi else 0.0
     except Exception:
         return 0.0
 
-def calculate_atr(df, period=14):
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Calculate Average True Range."""
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
 
-def calculate_rsi(df, period=14):
+
+def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Calculate Relative Strength Index."""
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def calculate_vwap_24h(df):
+
+def calculate_vwap_24h(df: pd.DataFrame) -> float:
+    """Calculate 24h Volume Weighted Average Price."""
     if len(df) < 48:
         return df['close'].mean()
     last_24h = df.tail(48)
     vwap = (last_24h['close'] * last_24h['volume']).sum() / last_24h['volume'].sum()
     return vwap
 
-def calculate_global_regime(btc_df):
-    if btc_df is None or btc_df.empty or len(btc_df) < SETTINGS['zWin']: 
+
+def calculate_global_regime(btc_df: Optional[pd.DataFrame]) -> tuple[str, str]:
+    """Calculate global market regime based on BTC."""
+    if btc_df is None or btc_df.empty or len(btc_df) < TRADING.z_win:
         return "NEUTRAL", "SAFE"
+    
     roc = btc_df['close'].pct_change(30)
-    if roc.isna().all(): return "NEUTRAL", "SAFE"
-    mean = roc.rolling(window=SETTINGS['zWin']).mean()
-    std = roc.rolling(window=SETTINGS['zWin']).std()
-    if std.iloc[-1] == 0 or pd.isna(std.iloc[-1]): return "NEUTRAL", "SAFE"
+    if roc.isna().all():
+        return "NEUTRAL", "SAFE"
+    
+    mean = roc.rolling(window=TRADING.z_win).mean()
+    std = roc.rolling(window=TRADING.z_win).std()
+    
+    if std.iloc[-1] == 0 or pd.isna(std.iloc[-1]):
+        return "NEUTRAL", "SAFE"
+    
     z_score = (roc - mean) / std
     current_z = z_score.iloc[-1]
-    if pd.isna(current_z): return "NEUTRAL", "SAFE"
     
-    if current_z > SETTINGS['zThr']: return "COMPRESSION", "RISKY"
-    elif current_z < -SETTINGS['zThr']: return "EXPANSION", "SAFE"
-    else: return "NEUTRAL", "SAFE"
+    if pd.isna(current_z):
+        return "NEUTRAL", "SAFE"
+    
+    if current_z > TRADING.z_thr:
+        return "COMPRESSION", "RISKY"
+    elif current_z < -TRADING.z_thr:
+        return "EXPANSION", "SAFE"
+    return "NEUTRAL", "SAFE"
 
-def process_levels(df, max_dist_pct=30.0):
-    levels = []
-    pending = []
-    if 'atr' not in df.columns: df['atr'] = calculate_atr(df)
+
+def process_levels(
+    df: pd.DataFrame, 
+    max_dist_pct: float = 30.0
+) -> tuple[list[dict], list[dict]]:
+    """Process OHLCV data to find support/resistance levels."""
+    levels: list[Level] = []
+    pending: list[dict] = []
+    
+    if 'atr' not in df.columns:
+        df['atr'] = calculate_atr(df)
+    
     atr = df['atr'].values
     high = df['high'].values
     low = df['low'].values
-    L, R = 4, 4 
-    start_idx = max(SETTINGS['atrLen'], L + R)
+    L, R = 4, 4
+    start_idx = max(TRADING.atr_len, L + R)
     
     for i in range(start_idx, len(df) - R):
-        if np.isnan(atr[i]): continue
+        if np.isnan(atr[i]):
+            continue
+        
         is_pivot_h = True
         is_pivot_l = True
+        
         for j in range(1, L + 1):
-            if high[i] < high[i-j] or high[i] < high[i+j]: is_pivot_h = False
-            if low[i] > low[i-j] or low[i] > low[i+j]: is_pivot_l = False
-        if is_pivot_h: pending.append({'idx': i, 'price': high[i], 'is_res': True, 'atr': atr[i], 'check_at': i + SETTINGS['reactBars']})
-        if is_pivot_l: pending.append({'idx': i, 'price': low[i], 'is_res': False, 'atr': atr[i], 'check_at': i + SETTINGS['reactBars']})
-            
-        active_pending = []
+            if high[i] < high[i-j] or high[i] < high[i+j]:
+                is_pivot_h = False
+            if low[i] > low[i-j] or low[i] > low[i+j]:
+                is_pivot_l = False
+        
+        if is_pivot_h:
+            pending.append({
+                'idx': i, 'price': high[i], 'is_res': True, 
+                'atr': atr[i], 'check_at': i + TRADING.react_bars
+            })
+        if is_pivot_l:
+            pending.append({
+                'idx': i, 'price': low[i], 'is_res': False, 
+                'atr': atr[i], 'check_at': i + TRADING.react_bars
+            })
+        
+        active_pending: list[dict] = []
         for p in pending:
             if i >= p['check_at']:
-                reaction_dist = SETTINGS['kReact'] * p['atr']
+                reaction_dist = TRADING.k_react * p['atr']
                 confirmed = False
-                window_low = np.min(low[p['idx'] : i+1])
-                window_high = np.max(high[p['idx'] : i+1])
+                window_low = np.min(low[p['idx']:i+1])
+                window_high = np.max(high[p['idx']:i+1])
+                
                 if p['is_res']:
-                    if (p['price'] - window_low) >= reaction_dist: confirmed = True
+                    if (p['price'] - window_low) >= reaction_dist:
+                        confirmed = True
                 else:
-                    if (window_high - p['price']) >= reaction_dist: confirmed = True
+                    if (window_high - p['price']) >= reaction_dist:
+                        confirmed = True
+                
                 if confirmed:
                     merged = False
-                    merge_tol = SETTINGS['mergeATR'] * p['atr']
+                    merge_tol = TRADING.merge_atr * p['atr']
                     for lvl in levels:
                         if lvl.is_res == p['is_res'] and abs(lvl.price - p['price']) < merge_tol:
                             lvl.update(p['price'], p['atr'], i)
                             merged = True
                             break
-                    if not merged: levels.append(Level(p['price'], p['is_res'], p['atr'], i))
-            else: active_pending.append(p)
+                    if not merged:
+                        levels.append(Level(
+                            price=p['price'],
+                            is_res=p['is_res'],
+                            atr=p['atr'],
+                            touches=1,
+                            last_touch_idx=i,
+                            created_at=i
+                        ))
+            else:
+                active_pending.append(p)
         pending = active_pending
 
     current_idx = len(df) - 1
     current_price = df['close'].iloc[-1]
-    active_supports = []
-    active_resistances = []
+    active_supports: list[dict] = []
+    active_resistances: list[dict] = []
     
     for lvl in levels:
         score = lvl.get_score(current_idx, current_price)
         dist_pct = abs(lvl.price - current_price) / current_price * 100
-        if dist_pct > max_dist_pct: continue
+        if dist_pct > max_dist_pct:
+            continue
         data = {'price': lvl.price, 'score': score}
-        if lvl.is_res and lvl.price > current_price: active_resistances.append(data)
-        elif not lvl.is_res and lvl.price < current_price: active_supports.append(data)
+        if lvl.is_res and lvl.price > current_price:
+            active_resistances.append(data)
+        elif not lvl.is_res and lvl.price < current_price:
+            active_supports.append(data)
     
     active_supports.sort(key=lambda x: abs(x['price'] - current_price))
     active_resistances.sort(key=lambda x: abs(x['price'] - current_price))
     return active_supports[:3], active_resistances[:3]
 
-def calculate_volatility_bands(current_price, atr):
+
+def calculate_volatility_bands(current_price: float, atr: float) -> tuple[float, float]:
+    """Calculate volatility bands based on ATR."""
     return current_price - (atr * 2.0), current_price + (atr * 2.0)
 
-def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
-    score = 50 
+
+def calculate_p_score(
+    regime: str, 
+    rsi: float, 
+    s1_score: float, 
+    r1_score: float, 
+    current_price: float, 
+    s1: float, 
+    r1: float
+) -> tuple[int, str, bool]:
+    """Calculate probability score for trade setup."""
+    score = 50
     details = ["• База: 50%"]
     
-    if regime == "EXPANSION": 
+    if regime == "EXPANSION":
         score += 10
         details.append("• Режим (BTC): +10% (EXPANSION)")
-    elif regime == "COMPRESSION": 
+    elif regime == "COMPRESSION":
         score -= 10
         details.append(f"• Режим (BTC): -10% ({regime})")
     else:
@@ -188,6 +263,7 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     
     dist_s1 = abs(current_price - s1)
     dist_r1 = abs(current_price - r1)
+    
     if dist_s1 < dist_r1:
         target_score = s1_score
         is_support_target = True
@@ -196,16 +272,12 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
         target_score = r1_score
         is_support_target = False
         lvl_type = "Resistance"
-        
-    # --- CRITICAL FIX: TOLERANCE PATCH ---
-    # Old Logic: < 0.0 was penalty.
-    # New Logic: > -2.0 is OKAY (0% penalty).
     
-    if target_score >= 1.0: 
+    # TOLERANCE PATCH: > -2.0 is OKAY
+    if target_score >= 1.0:
         score += 15
         details.append(f"• Уровень ({lvl_type}): +15% (Strong Score {target_score:.1f})")
-    elif target_score > -2.0: 
-        # MODERATE ZONE EXPANDED: -1.9 to 0.9 is now "Neutral"
+    elif target_score > -2.0:
         details.append(f"• Уровень ({lvl_type}): 0% (Moderate Score {target_score:.1f})")
     else:
         score -= 20
@@ -220,17 +292,35 @@ def calculate_p_score(regime, rsi, s1_score, r1_score, current_price, s1, r1):
     final_score = max(0, min(100, int(score)))
     return final_score, "\n".join(details), is_support_target
 
-def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rsi, funding, vwap, capital=1000.0, risk_percent=1.0):
-    def empty_response(reason):
+
+def get_intraday_strategy(
+    p_score: int, 
+    current_price: float, 
+    s1: float, 
+    r1: float, 
+    atr: float, 
+    is_sup_target: bool, 
+    rsi: float, 
+    funding: float, 
+    vwap: float,
+    capital: float = 1000.0, 
+    risk_percent: float = 1.0
+) -> dict[str, Any]:
+    """Generate intraday trading strategy."""
+    
+    def empty_response(reason: str) -> dict[str, Any]:
         return {
             "action": "WAIT", "reason": reason,
             "entry": 0, "stop": 0, "tp1": 0, "tp2": 0, "tp3": 0,
             "risk_pct": 0, "position_size": 0, "risk_amount": 0, "rrr": 0
         }
 
-    if p_score < 35: return empty_response(f"Strategy Score {p_score}% низкий (нужно >35%).")
-    if is_sup_target and rsi > 70: return empty_response("RSI > 70 у поддержки (Overbought).")
-    if not is_sup_target and rsi < 30: return empty_response("RSI < 30 у сопротивления (Oversold).")
+    if p_score < 35:
+        return empty_response(f"Strategy Score {p_score}% низкий (нужно >35%).")
+    if is_sup_target and rsi > 70:
+        return empty_response("RSI > 70 у поддержки (Overbought).")
+    if not is_sup_target and rsi < 30:
+        return empty_response("RSI < 30 у сопротивления (Oversold).")
 
     funding_threshold = 0.0003
     if funding > funding_threshold and is_sup_target and current_price < vwap:
@@ -265,7 +355,9 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
         potential_profit = abs(tp3 - entry)
         rrr = potential_profit / price_diff
     else:
-        position_size = 0; risk_pct_distance = 0; rrr = 0
+        position_size = 0
+        risk_pct_distance = 0
+        rrr = 0
 
     return {
         "action": action,
@@ -277,11 +369,15 @@ def get_intraday_strategy(p_score, current_price, s1, r1, atr, is_sup_target, rs
         "rrr": round(rrr, 1)
     }
 
-async def get_technical_indicators(ticker):
-    exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
+
+async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
+    """Get all technical indicators for a ticker."""
+    exchange = ccxt.binance(EXCHANGE_OPTIONS["binance"])
+    
     try:
-        m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", SETTINGS['timeframe'], limit=1500)
-        btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", SETTINGS['timeframe'], limit=1500)
+        # Fetch data in parallel
+        m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", TRADING.timeframe, limit=1500)
+        btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", TRADING.timeframe, limit=1500)
         funding_task = fetch_funding_rate(exchange, f"{ticker.upper()}/USDT")
         oi_task = fetch_open_interest(exchange, f"{ticker.upper()}/USDT")
 
@@ -289,7 +385,8 @@ async def get_technical_indicators(ticker):
             m30_task, btc_task, funding_task, oi_task
         )
         
-        if df is None or df.empty: return None
+        if df is None or df.empty:
+            return None
 
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
@@ -306,12 +403,14 @@ async def get_technical_indicators(ticker):
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
         funding_fmt = f"{funding_rate*100:+.3f}%"
         
-        # VISUAL TUNING: Synchronized Icons
-        # Green >= 1.0
-        # Yellow > -2.0 (OKAY)
-        # Red <= -2.0 (BAD)
-        def icon(sc): return "🟢" if sc >= 1.0 else "🟡" if sc > -2.0 else "🔴"
-        def fmt_lvls(lvls): return " | ".join([f"{icon(l['score'])} ${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls]) if lvls else "НЕТ"
+        # Icon helper
+        def icon(sc: float) -> str:
+            return "🟢" if sc >= 1.0 else "🟡" if sc > -2.0 else "🔴"
+        
+        def fmt_lvls(lvls: list[dict]) -> str:
+            if not lvls:
+                return "НЕТ"
+            return " | ".join([f"{icon(l['score'])} ${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls])
         
         m30_s1 = m30_sup[0]['price'] if m30_sup else df['low'].min()
         m30_r1 = m30_res[0]['price'] if m30_res else df['high'].max()
@@ -323,8 +422,9 @@ async def get_technical_indicators(ticker):
         )
         
         strat = get_intraday_strategy(
-            p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target, m30_rsi, funding_rate, vwap_24h,
-            capital=SETTINGS['default_capital'], risk_percent=SETTINGS['default_risk_pct']
+            p_score, current_price, m30_s1, m30_r1, m30_atr, is_sup_target, 
+            m30_rsi, funding_rate, vwap_24h,
+            capital=TRADING.default_capital, risk_percent=TRADING.default_risk_pct
         )
 
         return {

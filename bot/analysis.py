@@ -1,33 +1,42 @@
+"""
+AI analysis module with retry logic and centralized configuration.
+"""
+
 import os
 import logging
+from datetime import datetime, timezone
+from typing import Optional
+
 import ccxt.async_support as ccxt
-from datetime import datetime, timedelta
 from openai import AsyncOpenAI
 from aiolimiter import AsyncLimiter
-from bot.prices import get_crypto_price, get_market_summary
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_ATTEMPTS
+from bot.prices import get_crypto_price
 from bot.indicators import get_technical_indicators
 
 logger = logging.getLogger(__name__)
 
-# --- ОГРАНИЧЕНИЯ И КЭШ ---
-rate_limiter = AsyncLimiter(8, 60) # 8 запросов в минуту
-daily_cache = {}
+# --- RATE LIMITER ---
+rate_limiter = AsyncLimiter(RATE_LIMITS.openrouter_requests, RATE_LIMITS.openrouter_period)
 
-# --- АКТУАЛЬНЫЕ ТИКЕРЫ ---
-SECTOR_CANDIDATES = {
-    "AI": ["FET/USDT", "RENDER/USDT", "WLD/USDT", "ARKM/USDT", "GRT/USDT", "NEAR/USDT"],
-    "RWA": ["ONDO/USDT", "PENDLE/USDT", "OM/USDT", "TRU/USDT", "DUSK/USDT"],
-    "L2": ["OP/USDT", "ARB/USDT", "POL/USDT", "METIS/USDT", "MANTA/USDT", "STRK/USDT"],
-    "DePIN": ["FIL/USDT", "AR/USDT", "IOTX/USDT", "THETA/USDT", "HBAR/USDT"] 
-}
+# --- CACHE ---
+daily_cache: dict[str, str] = {}
 
-# --- ФУНКЦИИ ---
 
-async def fetch_ticker_multisource(exchanges, symbol):
+# --- HELPER FUNCTIONS ---
+
+async def fetch_ticker_multisource(
+    exchanges: dict[str, ccxt.Exchange], 
+    symbol: str
+) -> Optional[dict]:
+    """Fetch ticker from multiple exchanges with fallback."""
     for name, exchange in exchanges.items():
         try:
             ticker = await exchange.fetch_ticker(symbol)
-            if not ticker or ticker['last'] is None: continue
+            if not ticker or ticker['last'] is None:
+                continue
             return {
                 "price": ticker['last'],
                 "change": ticker['percentage'],
@@ -38,15 +47,18 @@ async def fetch_ticker_multisource(exchanges, symbol):
             continue
     return None
 
-async def fetch_real_market_data():
+
+async def fetch_real_market_data() -> tuple[str, list[str]]:
+    """Fetch real market data from multiple exchanges."""
     exchanges = {
-        "Binance": ccxt.binance({'options': {'defaultType': 'future'}, 'enableRateLimit': True}),
-        "Bybit": ccxt.bybit({'options': {'defaultType': 'future'}, 'enableRateLimit': True}),
-        "MEXC": ccxt.mexc({'options': {'defaultType': 'swap'}, 'enableRateLimit': True}),
-        "BingX": ccxt.bingx({'options': {'defaultType': 'swap'}, 'enableRateLimit': True})
+        "Binance": ccxt.binance(EXCHANGE_OPTIONS["binance"]),
+        "Bybit": ccxt.bybit(EXCHANGE_OPTIONS["bybit"]),
+        "MEXC": ccxt.mexc(EXCHANGE_OPTIONS["mexc"]),
+        "BingX": ccxt.bingx(EXCHANGE_OPTIONS["bingx"])
     }
     market_report = ""
-    valid_tickers_list = [] 
+    valid_tickers_list: list[str] = []
+    
     try:
         btc_data = await fetch_ticker_multisource(exchanges, 'BTC/USDT')
         if btc_data:
@@ -60,23 +72,55 @@ async def fetch_real_market_data():
                 data = await fetch_ticker_multisource(exchanges, ticker)
                 if data:
                     vol_str = f"${int(data['vol']):,}"
-                    market_report += f"ID: {ticker} | Price: {data['price']} | Change: {data['change']}% | Vol: {vol_str} | Src: {data['source']}\n"
+                    market_report += (
+                        f"ID: {ticker} | Price: {data['price']} | "
+                        f"Change: {data['change']}% | Vol: {vol_str} | Src: {data['source']}\n"
+                    )
                     valid_tickers_list.append(ticker)
                     found_any = True
             if not found_any:
                 market_report += f"(No data for {sector})\n"
             market_report += "\n"
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error fetching market data: {e}")
         market_report += "Error fetching data."
     finally:
         for exchange in exchanges.values():
             await exchange.close()
+    
     return market_report, valid_tickers_list
 
+
+def _get_openai_client() -> AsyncOpenAI:
+    """Create OpenAI client for OpenRouter."""
+    return AsyncOpenAI(
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        base_url="https://openrouter.ai/api/v1"
+    )
+
+
+@retry(
+    stop=stop_after_attempt(RETRY_ATTEMPTS),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True
+)
+async def _call_openai(prompt: str, temperature: float = 0.0) -> str:
+    """Call OpenAI API with retry logic."""
+    client = _get_openai_client()
+    async with rate_limiter:
+        completion = await client.chat.completions.create(
+            model=os.getenv("MODEL_NAME", "deepseek/deepseek-chat"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature
+        )
+    return completion.choices[0].message.content or ""
+
+
 # --- 1. DAILY BRIEFING ---
-async def get_daily_briefing(user_input=None):
-    cache_key = datetime.utcnow().strftime("%Y-%m-%d-%H")
+
+async def get_daily_briefing(user_input: Optional[str] = None) -> str:
+    """Generate daily market briefing."""
+    cache_key = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H")
     if cache_key in daily_cache:
         return daily_cache[cache_key]
 
@@ -84,11 +128,8 @@ async def get_daily_briefing(user_input=None):
     if not valid_tickers:
         return "⚠️ Ошибка: Не удалось получить рыночные данные. Попробуйте позже."
 
-    client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
-    
-    # HTML ПРОМТ
     prompt = f"""
-    Ты — алгоритмический аналитик Market Lens. СЕГОДНЯ: {datetime.utcnow().strftime("%Y-%m-%d")}.
+    Ты — алгоритмический аналитик Market Lens. СЕГОДНЯ: {datetime.now(timezone.utc).strftime("%Y-%m-%d")}.
     
     РЫНОЧНЫЕ ДАННЫЕ:
     {real_market_data}
@@ -117,29 +158,23 @@ async def get_daily_briefing(user_input=None):
     """
     
     try:
-        async with rate_limiter:
-            completion = await client.chat.completions.create(
-                model=os.getenv("MODEL_NAME", "deepseek/deepseek-chat"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0
-            )
-        report = completion.choices[0].message.content
+        report = await _call_openai(prompt, temperature=0.0)
         daily_cache.clear()
         daily_cache[cache_key] = report
         return report
     except Exception as e:
+        logger.error(f"Daily briefing error: {e}")
         return f"⚠️ Ошибка Daily: {e}"
 
+
 # --- 2. AUDIT (VC STYLE) ---
-async def analyze_token_fundamentals(ticker):
-    # 1. Получаем базовые данные для шапки (Цена, Объем)
+
+async def analyze_token_fundamentals(ticker: str) -> str:
+    """Perform fundamental analysis of a token."""
     price_data, _ = await get_crypto_price(ticker)
     curr_price = price_data.get('price', 'N/A') if price_data else 'N/A'
     vol = price_data.get('volume_24h', 'N/A') if price_data else 'N/A'
     
-    client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
-    
-    # 2. VC SUPER PROMPT (HTML Only)
     prompt = f"""
     Ты — старший аналитик венчурного фонда (VC Researcher).
     Актив: {ticker.upper()} | Цена: ${curr_price} | Объем: {vol}
@@ -180,50 +215,39 @@ async def analyze_token_fundamentals(ticker):
     """
 
     try:
-        async with rate_limiter:
-            completion = await client.chat.completions.create(
-                model=os.getenv("MODEL_NAME", "deepseek/deepseek-chat"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
-            )
-        return completion.choices[0].message.content
+        return await _call_openai(prompt, temperature=0.1)
     except Exception as e:
+        logger.error(f"Audit error: {e}")
         return f"⚠️ Ошибка аудита: {e}"
 
-# --- 3. SNIPER (MARKET LENS V2.0 - TRUE MULTITOOL) ---
-async def get_sniper_analysis(ticker, language="ru"):
-    # 1. Получаем данные цены
+
+# --- 3. SNIPER ---
+
+async def get_sniper_analysis(ticker: str, language: str = "ru") -> str:
+    """Generate sniper analysis for a ticker."""
     price_data, error = await get_crypto_price(ticker)
     if not price_data:
         return f"⚠️ Не удалось найти {ticker}."
 
-    # 2. Получаем индикаторы (TRUE MULTITOOL DATA)
     indicators = await get_technical_indicators(ticker)
     if not indicators:
         return f"⚠️ Ошибка получения индикаторов для {ticker}."
 
-    # Данные для AI
     curr_price = indicators['price']
     change = indicators['change']
-    
-    from datetime import datetime, timezone
-    
-    # 1. Metadata
     calc_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     
-    # 2. Unpack Indicators
     p_score = indicators['p_score']
     strat = indicators['strategy']
     
-    # 3. Determine Sentiment String
+    # Determine sentiment
     try:
-        f_val = float(indicators['funding'].strip('%').replace('+',''))
+        f_val = float(indicators['funding'].strip('%').replace('+', ''))
         sentiment = "Бычье" if f_val > 0.01 else "Медвежье" if f_val < -0.01 else "Нейтральное"
-    except:
+    except (ValueError, AttributeError):
         sentiment = "N/A"
 
-    # 4. Format Numbers
-    def fmt(val): 
+    def fmt(val: float) -> str:
         return f"${val:.4f}" if isinstance(val, (int, float)) and val > 0 else "N/A"
     
     entry_str = fmt(strat['entry'])
@@ -232,17 +256,14 @@ async def get_sniper_analysis(ticker, language="ru"):
     tp2_str = fmt(strat['tp2'])
     tp3_str = fmt(strat['tp3'])
     
-    # 5. Dynamic Position Sizing Formatting
+    # Position size formatting
     pos_size_val = strat['position_size']
     if pos_size_val > 0:
-        if isinstance(curr_price, (int, float)) and curr_price < 1.0:
-            pos_size_str = f"{pos_size_val:.0f}"
-        else:
-            pos_size_str = f"{pos_size_val:.4f}"
+        pos_size_str = f"{pos_size_val:.0f}" if curr_price < 1.0 else f"{pos_size_val:.4f}"
     else:
         pos_size_str = "0"
 
-    # 6. Risk Info Block (Clean HTML)
+    # Risk info block
     risk_info = ""
     if strat['action'] != "WAIT":
         risk_info = (
@@ -252,7 +273,13 @@ async def get_sniper_analysis(ticker, language="ru"):
             f"• <b>RRR:</b> 1:{strat['rrr']:.1f}"
         )
 
-    # 7. M30 SNIPER v2.3.2 FINAL PROMPT
+    # Determine trend direction
+    try:
+        vwap_val = float(indicators['vwap'].replace('$', ''))
+        trend_dir = 'выше' if curr_price > vwap_val else 'ниже'
+    except (ValueError, AttributeError):
+        trend_dir = 'около'
+
     prompt = f"""
     Ты — Профессиональный Интрадей Трейдер (M30 Sniper).
     Твоя задача — проанализировать данные и выдать четкий торговый план.
@@ -305,7 +332,7 @@ async def get_sniper_analysis(ticker, language="ru"):
     • <b>SUP:</b> {indicators['support']}
 
     1️⃣ <b>СТРУКТУРА & ЛОГИКА</b>
-    • <b>Тренд:</b> Цена {'выше' if isinstance(curr_price, (int, float)) and curr_price > float(indicators['vwap'].replace('$','')) else 'ниже'} VWAP.
+    • <b>Тренд:</b> Цена {trend_dir} VWAP.
     • <b>Strategy Score:</b> <b>{p_score}%</b>.
     • <b>Декомпозиция:</b>
       [Скопируй сюда пункты из STRATEGY SCORE DECOMPOSITION].
@@ -330,33 +357,24 @@ async def get_sniper_analysis(ticker, language="ru"):
     • Жди закрытия свечи M30 для подтверждения.
     """
 
-    client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
-
     try:
-        async with rate_limiter:
-            completion = await client.chat.completions.create(
-                model=os.getenv("MODEL_NAME", "deepseek/deepseek-chat"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0
-            )
-        return completion.choices[0].message.content
+        return await _call_openai(prompt, temperature=0.0)
     except Exception as e:
         logger.error(f"Sniper AI Error: {e}")
         return f"⚠️ Ошибка анализа: {e}"
 
-# --- 4. MARKET SCAN (HIDDEN ACCUMULATION) ---
-async def get_market_scan():
-    # 1. Получаем полные данные рынка (все сектора)
+
+# --- 4. MARKET SCAN ---
+
+async def get_market_scan() -> str:
+    """Scan market for hidden accumulation signals."""
     real_market_data, valid_tickers = await fetch_real_market_data()
     if not valid_tickers:
         return "⚠️ Ошибка: Не удалось получить данные с бирж."
-
-    client = AsyncOpenAI(api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1")
     
-    # 2. ПРОМТ "HIDDEN ACCUMULATION"
     prompt = f"""
     Ты — алгоритмический скринер Market Lens (Liquidity Hunter).
-    ДАТА: {datetime.utcnow().strftime("%Y-%m-%d")}.
+    ДАТА: {datetime.now(timezone.utc).strftime("%Y-%m-%d")}.
     
     ПОЛНЫЙ СПИСОК РЫНКА (ДАННЫЕ):
     {real_market_data}
@@ -373,7 +391,7 @@ async def get_market_scan():
     СТРУКТУРА ОТВЕТА:
 
     🔭 <b>Market Lens | Hidden Accumulation Scan</b>
-    📅 Дата: {datetime.utcnow().strftime("%d.%m.%Y")} | 🏦 Market: Global
+    📅 Дата: {datetime.now(timezone.utc).strftime("%d.%m.%Y")} | 🏦 Market: Global
 
     📊 <b>Топ-5 Лидеров (Heatmap):</b>
     1. <b>[TICKER]</b> — [Причина одним словом, например: "Рост объема"] (P-Score: [XX]%)
@@ -408,19 +426,14 @@ async def get_market_scan():
     """
 
     try:
-        async with rate_limiter:
-            completion = await client.chat.completions.create(
-                model=os.getenv("MODEL_NAME", "deepseek/deepseek-chat"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
-            )
-        return completion.choices[0].message.content
+        return await _call_openai(prompt, temperature=0.1)
     except Exception as e:
         logger.error(f"Scan Error: {e}")
         return f"⚠️ Ошибка сканера: {e}"
 
+
 # --- COMPATIBILITY LAYER ---
-# Старые функции для совместимости с main.py
-async def get_crypto_analysis(ticker, name, language="ru"):
-    """Legacy function - redirects to analyze_token_fundamentals"""
+
+async def get_crypto_analysis(ticker: str, name: str, language: str = "ru") -> str:
+    """Legacy function - redirects to analyze_token_fundamentals."""
     return await analyze_token_fundamentals(ticker)
