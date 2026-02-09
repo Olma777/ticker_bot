@@ -1,8 +1,29 @@
+# Core Bot
+aiogram>=3.17.0
+aiohttp>=3.9.0
+aiofiles>=23.0.0
+aiolimiter>=1.1.0
+APScheduler>=3.10.0
+
+# Data & Analysis
 ccxt
 pandas
 numpy
-python-dotenv
-requests>=2.31.0
+
+# API Framework
 fastapi>=0.110.0
 uvicorn>=0.30.0
+requests>=2.31.0
+
+# AI/LLM
+openai>=1.0.0
+
+# Config & Validation
 pydantic>=2.7.0
+python-dotenv>=1.0.0
+
+# Retry & Resilience
+tenacity>=8.2.0
+
+# HTTP
+httpx>=0.27.0
