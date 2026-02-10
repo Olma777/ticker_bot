@@ -1,7 +1,7 @@
 """
 Data models for Decision Engine.
 Pure dataclasses with no logic to ensure type safety across the pipeline.
-Updated for P1-FIX strict specs + Context snapshots for Notifier.
+Updated for P1-FIX strict specs + Order Calc targets.
 """
 
 from dataclasses import dataclass
@@ -53,14 +53,18 @@ class PScoreResult:
 
 @dataclass
 class RiskContext:
-    """Risk management calculations (P1-FIX-04)."""
+    """Risk management calculations (P1-FIX-OrderCalc)."""
     entry_price: float
     stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
     stop_dist: float
     stop_dist_pct: float
     risk_amount: float     # $ Risk
     position_size: float   # In Asset (e.g. BTC)
     leverage: float        # Implied leverage based on capital
+    rrr_tp2: float         # Risk:Reward to TP2
     fee_included: bool
 
 @dataclass

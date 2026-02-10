@@ -89,9 +89,10 @@ def send_decision_card(result: DecisionResult, event: dict):
             if result.risk:
                 r = result.risk
                 lines.append(f"Entry: {r.entry_price:.4f}")
-                lines.append(f"SL: {r.stop_loss:.4f}  (Dist={r.stop_dist:.2f} | Risk=${r.risk_amount:.0f})")
+                lines.append(f"SL: {r.stop_loss:.4f}  (StopDist={r.stop_dist:.4f} | Risk=${r.risk_amount:.2f})")
+                lines.append(f"TP1: {r.tp1:.4f} | TP2: {r.tp2:.4f} | TP3: {r.tp3:.4f}")
                 lines.append(f"Size: {r.position_size:.4f}")
-                lines.append(f"Lev: {r.leverage:.1f}x")
+                lines.append(f"RRR (to TP2): {r.rrr_tp2:.2f}")
             
             lines.append("")
             lines.append(f"<b>P-SCORE: {result.pscore.score}/{Config.P_SCORE_THRESHOLD}</b>")

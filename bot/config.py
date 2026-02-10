@@ -1,6 +1,7 @@
 """
 Centralized configuration for Market Lens Bot.
 All settings, constants, and shared configurations in one place.
+Updated for P1-FIX (Strict Order Calc).
 """
 
 import os
@@ -39,6 +40,13 @@ class TradingSettings:
     default_risk_pct: float = 1.0
     p_score_threshold: int = 35
     funding_threshold: float = 0.0003
+    
+    # --- P1-FIX-OrderCalc (Strict Formulas) ---
+    sl_buffer_atr: float = 0.25
+    tp1_atr: float = 0.75
+    tp2_atr: float = 1.25
+    tp3_atr: float = 2.00
+    min_rrr: float = 1.10
 
 
 TRADING = TradingSettings()
@@ -114,13 +122,18 @@ class Config:
     MAX_DIST_PCT = 30.0
     P_SCORE_THRESHOLD = 35
     FUNDING_THRESHOLD = 0.0003
+    
+    # --- P1-FIX-OrderCalc Defaults ---
+    DEFAULT_CAPITAL = 1000.0
+    DEFAULT_RISK_PCT = 1.0
+    MIN_RRR = TRADING.min_rrr
 
     # --- KEVLAR FILTERS ---
-    KEVLAR_MOMENTUM_ATR_MULT = 1.5      # K1: Candle body vs ATR
-    KEVLAR_MISSED_ENTRY_ATR_MULT = 1.0  # K2: Max distance from level
-    KEVLAR_RSI_LOW = 20                 # K3: RSI Oversold
-    KEVLAR_RSI_HIGH = 80                # K3: RSI Overbought
-    KEVLAR_STRONG_PSCORE = 50           # K3: Exception for strong signals
+    KEVLAR_MOMENTUM_ATR_MULT = 1.5      # K1
+    KEVLAR_MISSED_ENTRY_ATR_MULT = 1.0  # K2
+    KEVLAR_RSI_LOW = 20                 # K3
+    KEVLAR_RSI_HIGH = 80                # K3
+    KEVLAR_STRONG_PSCORE = 50           # K3
 
     @classmethod
     def validate(cls):
