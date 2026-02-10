@@ -2,7 +2,7 @@
 Notifier Module.
 Formats and sends Decision Cards to Telegram.
 Strictly implements LOCKED Spec (P1 Final).
-Updated for P1-FINAL-TEXT-CLEANSE: No 'Close' references.
+Updated for P1-FINAL-TEXT-CLEANSE-V2: Absolute ZERO 'Close' references.
 """
 
 import logging
@@ -23,7 +23,7 @@ def send_decision_card(result: DecisionResult, event: dict):
      - No discretionary text. 
      - Strict colors.
      - "P-SCORE: X / 35"
-     - ENTRY MODE: TOUCH_LIMIT (No 'Close' refs anywhere)
+     - ENTRY MODE: TOUCH_LIMIT (Hardcoded text to ensure compliance)
     """
     if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
         return
