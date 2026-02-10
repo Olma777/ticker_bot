@@ -11,6 +11,8 @@ from typing import Literal
 
 from bot.config import Config
 from bot.database import init_db, save_event
+from bot.decision_engine import make_decision
+from bot.notifier import send_decision_card
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -53,39 +55,6 @@ class TvPayload(BaseModel):
             raise ValueError("bar_time must be Unix Timestamp in SECONDS (post-2020)")
         return v
 
-# --- TELEGRAM SENDER (Sync) ---
-def send_telegram_alert_sync(payload_dict: dict):
-    if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
-        return
-
-    try:
-        # Secure HTML Escaping
-        safe_event = html.escape(payload_dict['event'])
-        safe_symbol = html.escape(payload_dict['symbol'])
-        
-        message = (
-            f"🎯 <b>TV EVENT: {safe_event}</b>\n"
-            f"Symbol: <code>{safe_symbol}</code>\n"
-            f"Level: {payload_dict['level']}\n"
-            f"Score: {payload_dict['score']}"
-        )
-        
-        url = f"https://api.telegram.org/bot{Config.TELEGRAM_TOKEN}/sendMessage"
-        data = {
-            "chat_id": Config.TELEGRAM_CHAT_ID, 
-            "text": message, 
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True
-        }
-        
-        # Short timeout (3s) to avoid hanging workers
-        resp = requests.post(url, json=data, timeout=3.0)
-        if resp.status_code != 200:
-            logger.error(f"TG Error {resp.status_code}: {resp.text}")
-            
-    except Exception as e:
-        logger.error(f"TG Network Error: {e}")
-
 # --- UTILS ---
 def generate_event_id(p: TvPayload) -> str:
     """
@@ -118,6 +87,8 @@ async def webhook_listener(
     data = payload.model_dump()
     data['event_id'] = event_id
     
+    # Note: save_event is sync for sqlite, but fast enough. 
+    # Ideally async if high volume, but SQLite WAL is plenty fast.
     is_new = save_event(
         event_id=event_id,
         bar_time=payload.bar_time,
@@ -129,7 +100,18 @@ async def webhook_listener(
     if not is_new:
         return {"status": "ignored_duplicate", "id": event_id}
 
-    # 4. Notify
-    background_tasks.add_task(send_telegram_alert_sync, data)
-
+    # 4. DECISION ENGINE (Async Pipeline)
+    # We await the decision process (fetching data) -> usually 1-2s.
+    # If this timeout concerns arise, we can move this entirely to background_tasks,
+    # but spec implies immediate process trigger.
+    try:
+        decision_result = await make_decision(data)
+        
+        # 5. Notify (Background Sync)
+        background_tasks.add_task(send_decision_card, decision_result, data)
+        
+    except Exception as e:
+        logger.error(f"Decision Pipeline Failed: {e}")
+        # Even if decision fails, we return 200 as we saved the event
+    
     return {"status": "received", "id": event_id}

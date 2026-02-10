@@ -115,6 +115,13 @@ class Config:
     P_SCORE_THRESHOLD = 35
     FUNDING_THRESHOLD = 0.0003
 
+    # --- KEVLAR FILTERS ---
+    KEVLAR_MOMENTUM_ATR_MULT = 1.5      # K1: Candle body vs ATR
+    KEVLAR_MISSED_ENTRY_ATR_MULT = 1.0  # K2: Max distance from level
+    KEVLAR_RSI_LOW = 20                 # K3: RSI Oversold
+    KEVLAR_RSI_HIGH = 80                # K3: RSI Overbought
+    KEVLAR_STRONG_PSCORE = 50           # K3: Exception for strong signals
+
     @classmethod
     def validate(cls):
         """Security check. Called via Server Lifespan."""
