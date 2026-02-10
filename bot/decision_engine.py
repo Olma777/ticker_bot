@@ -1,7 +1,7 @@
 """
 Decision Engine Orchestrator.
 Pipelines market data, sentiment, P-Score, and Kevlar to produce a final decision.
-Updated for P1-FIX-OrderCalc: Strict Order Math & RRR Validation.
+Updated for P1-OrderCalc: Using strict deterministic order module.
 """
 
 import logging
@@ -19,19 +19,20 @@ from bot.market_data import load_market_context
 from bot.sentiment import load_sentiment
 from bot.pscore import calculate_pscore, score_level
 from bot.kevlar import apply_kevlar
-from bot.config import Config, TRADING
+from bot.config import Config
+from bot.order_calc import build_order_plan
 
 logger = logging.getLogger("DecisionEngine-Orchestrator")
 
 
 async def make_decision(event: dict) -> DecisionResult:
     """
-    Execute strict decision pipeline (P1-FIX-OrderCalc):
+    Execute strict decision pipeline (P1-OrderCalc):
     1. MarketContext
     2. Sentiment
     3. P-Score 
     4. Kevlar
-    5. Order Calculation (Strict Rules)
+    5. Order Calculation (Strict Module)
     """
     symbol = event.get('symbol')
     if not symbol:
@@ -99,76 +100,50 @@ async def make_decision(event: dict) -> DecisionResult:
         reason = f"P-SCORE below threshold ({Config.P_SCORE_THRESHOLD})"
         
     elif potential_side:
-        # Candidate for Trade -> Calculate Orders first to validate RRR
+        # Candidate for Trade -> Calculate Orders via Strict Module
         side = potential_side
         
-        # --- P1-FIX-OrderCalc STRICT MATH ---
-        current_price = market.price
+        # Extract Inputs
+        level_price = float(event.get('level', market.price))
+        zone_half = float(event.get('zone_half', 0.0))
         atr = market.atr
-        level_price = event.get('level', current_price)
-        zone_half = event.get('zone_half', 0.0)
-        
-        # 1. Entry (Touch P1 = Level)
-        entry_price = level_price
-        
-        # 2. SL (Zone Boundary ± Buffer)
-        sl_buffer = TRADING.sl_buffer_atr * atr
-        
-        if side == "LONG":
-            zone_bot = level_price - zone_half
-            stop_loss = zone_bot - sl_buffer
-            
-            # 3. TP Targets
-            tp1 = entry_price + (TRADING.tp1_atr * atr)
-            tp2 = entry_price + (TRADING.tp2_atr * atr)
-            tp3 = entry_price + (TRADING.tp3_atr * atr)
-        else:
-            zone_top = level_price + zone_half
-            stop_loss = zone_top + sl_buffer
-            
-            # 3. TP Targets
-            tp1 = entry_price - (TRADING.tp1_atr * atr)
-            tp2 = entry_price - (TRADING.tp2_atr * atr)
-            tp3 = entry_price - (TRADING.tp3_atr * atr)
-
-        # 4. Size & Risk
         capital = getattr(Config, 'DEFAULT_CAPITAL', 1000.0)
-        risk_pct = getattr(Config, 'DEFAULT_RISK_PCT', 1.0) / 100.0
-        risk_amount = capital * risk_pct
+        risk_pct = getattr(Config, 'DEFAULT_RISK_PCT', 1.0)
         
-        stop_dist = abs(entry_price - stop_loss)
-        if stop_dist == 0: stop_dist = atr # Prevent div/0
-
-        position_size = risk_amount / stop_dist
+        # CALL DETERMINISTIC MODULE
+        plan = build_order_plan(
+            side=side,
+            level=level_price,
+            zone_half=zone_half,
+            atr=atr,
+            capital=capital,
+            risk_pct=risk_pct
+        )
         
-        # 5. RRR to TP2
-        reward_dist = abs(tp2 - entry_price)
-        rrr_tp2 = reward_dist / stop_dist
-        
-        # Leverage
-        notional = position_size * entry_price
-        leverage = notional / capital
-
-        # Validation Check (P1-FIX-04)
-        if rrr_tp2 < TRADING.min_rrr:
+        if plan.reason_blocked:
             decision = "WAIT"
-            reason = f"RRR {rrr_tp2:.2f} < Min {TRADING.min_rrr}"
+            reason = f"{plan.reason_blocked}"
         else:
             decision = "TRADE"
             reason = f"Systems GO (Score {pscore.score})"
             
+            # Populate RiskContext from Plan
+            # Calculate leverage manually as it's computed in order_calc implicitly via size but not returned directly
+            leverage = (plan.size_units * plan.entry) / capital if capital > 0 else 0
+            stop_pct = (plan.stop_dist / plan.entry) * 100 if plan.entry > 0 else 0
+
             risk_ctx = RiskContext(
-                entry_price=entry_price,
-                stop_loss=stop_loss,
-                tp1=tp1,
-                tp2=tp2,
-                tp3=tp3,
-                stop_dist=stop_dist,
-                stop_dist_pct=(stop_dist / entry_price) * 100,
-                risk_amount=risk_amount,
-                position_size=position_size,
+                entry_price=plan.entry,
+                stop_loss=plan.sl,
+                tp1=plan.tp1,
+                tp2=plan.tp2,
+                tp3=plan.tp3,
+                stop_dist=plan.stop_dist,
+                stop_dist_pct=stop_pct,
+                risk_amount=plan.risk_amount,
+                position_size=plan.size_units,
                 leverage=leverage,
-                rrr_tp2=rrr_tp2,
+                rrr_tp2=plan.rrr_tp2,
                 fee_included=False
             )
             
