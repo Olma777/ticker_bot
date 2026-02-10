@@ -1,7 +1,7 @@
 """
 Data models for Decision Engine.
 Pure dataclasses with no logic to ensure type safety across the pipeline.
-Updated for P1-FIX strict specs + Order Calc targets.
+Updated for P1-Final: Strict compliance + K1 Momentum support.
 """
 
 from dataclasses import dataclass
@@ -26,6 +26,7 @@ class LevelGradeResult:
 class MarketContext:
     """Market data snapshot."""
     price: float
+    open: float   # Added for K1 Momentum
     atr: float
     rsi: float
     vwap: float

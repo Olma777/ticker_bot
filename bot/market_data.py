@@ -2,6 +2,7 @@
 Market Data Component.
 Fetches OHLCV and calculates indicators (ATR, RSI, VWAP) via CCXT.
 Strictly deterministic, no AI guessing.
+Updated for P1-Final: Includes Open price for K1 check.
 """
 
 import logging
@@ -24,7 +25,6 @@ async def fetch_ohlcv(symbol: str, timeframe: str = "30m", limit: int = 100) -> 
     Fetch OHLCV data from Binance (or fallback).
     Returns DataFrame with columns: timestamp, open, high, low, close, volume.
     """
-    # Default to Binance for consistency
     exchange_id = "binance"
     options = EXCHANGE_OPTIONS.get(exchange_id, {})
     
@@ -83,10 +83,7 @@ def calculate_vwap(df: pd.DataFrame) -> float:
     v = df["volume"]
     tp = (df["high"] + df["low"] + df["close"]) / 3
     
-    # Simple cumulative VWAP over loaded window (approx. 2 days for 100 M30 candles)
-    # Ideally should reset at session start, but rolling is acceptable proxy for trend
     vwap = (tp * v).cumsum() / v.cumsum()
-    
     return float(vwap.iloc[-1])
 
 
@@ -112,6 +109,7 @@ async def load_market_context(symbol: str) -> MarketContext:
         logger.warning(f"Insufficient data for {symbol}")
         return MarketContext(
             price=0.0,
+            open=0.0,
             atr=0.0,
             rsi=50.0,
             vwap=0.0,
@@ -121,17 +119,18 @@ async def load_market_context(symbol: str) -> MarketContext:
 
     try:
         price = float(df["close"].iloc[-1])
+        open_p = float(df["open"].iloc[-1]) # Need Open for K1
         atr = calculate_atr(df, period=Config.ATR_LEN)
         rsi = calculate_rsi(df, period=14)
         vwap = calculate_vwap(df)
         regime = determine_regime(price, vwap)
         
-        # Validation checks
         if atr == 0 or vwap == 0:
              raise ValueError("Indicator calculation failed")
 
         return MarketContext(
             price=price,
+            open=open_p,
             atr=atr,
             rsi=rsi,
             vwap=vwap,
@@ -143,6 +142,7 @@ async def load_market_context(symbol: str) -> MarketContext:
         logger.error(f"Error processing context for {symbol}: {e}")
         return MarketContext(
             price=0.0,
+            open=0.0,
             atr=0.0,
             rsi=50.0,
             vwap=0.0,

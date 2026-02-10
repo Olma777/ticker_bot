@@ -2,6 +2,7 @@
 Kevlar Core.
 Strict filters to block bad trades regardless of score.
 Implemented in purely deterministic logic.
+Updated for P1-Final: K1 Momentum Implemented.
 """
 
 from typing import Optional
@@ -21,38 +22,31 @@ def apply_kevlar(
     pscore: PScoreResult
 ) -> KevlarResult:
     """
-    Apply Kevlar filters K1-K4.
+    Apply Kevlar filters K1-K4 (BLOCKING).
     Returns Passed=True only if ALL filters pass.
     """
     
     # Extract event data
-    event_type = event.get('event') # SUPPORT_TEST / RESISTANCE_TEST
+    event_type = event.get('event') 
     level_price = event.get('level', 0)
     current_price = market.price
     atr = market.atr
     
-    # Safety Check: If ATR is 0, we can't filter correctly -> BLOCK
+    # Safety Check: If ATR is 0 -> BLOCK
     if atr == 0:
         return KevlarResult(passed=False, blocked_by="K0_NO_ATR")
 
     # --- K1: Momentum Instability ---
-    # "BLOCK if abs(close - open) > X * ATR"
-    # We don't have current candle Open in market_context (it has last close).
-    # We'd need the real-time candle data.
-    # Approximation: If price moved significantly from retrieval?
-    # Or rely on Volatility:
-    # Let's use 1h Change vs ATR?
-    # Strict implementation requires Open.
-    # For now, let's implement the "Range Position" part if we had OHLC.
-    # Since we fetch OHLCV in market_data, we can pass the last candle's body.
-    # But market_data returns context, not raw DF.
-    # We will assume MarketContext might need expansion or we skip precise K1 body check
-    # and rely on ATR volatility check:
-    # BLOCK if Price change 24h > 10%? No, that's not momentum.
-    # Let's skip K1 precise candle body check for now unless we add `last_candle` to Context.
-    # To strictly follow spec, we should add `last_open` to MarketContext.
-    # **Assuming we add `last_open` to MarketContext in a future refine.**
-    # For now, implementing accessible interactions.
+    # BLOCK if abs(close - open) > X * ATR
+    # Requires candle Open. 
+    candle_body = abs(market.price - market.open)
+    max_body = Config.KEVLAR_MOMENTUM_ATR_MULT * atr
+    
+    if candle_body > max_body:
+         return KevlarResult(
+             passed=False,
+             blocked_by=f"K1_MOMENTUM_INSTABILITY (Body {candle_body:.2f} > {max_body:.2f})"
+         )
 
     # --- K2: Missed Entry ---
     # BLOCK if abs(price - level) > Y * ATR
@@ -68,9 +62,6 @@ def apply_kevlar(
     # --- K3: RSI Panic Guard ---
     # RSI < 20 or > 80: Block unless P-Score >= STRONG
     if market.rsi < Config.KEVLAR_RSI_LOW:
-        # Oversold - Dangerous to Short? Or Dangerous to Long (falling knife)?
-        # Usually: Oversold = Good for Long, Bad for Short (late).
-        # Spec says: "If RSI < 20 or > 80: permit only if P-Score >= STRONG"
         if pscore.score < Config.KEVLAR_STRONG_PSCORE:
              return KevlarResult(
                  passed=False,
@@ -78,7 +69,6 @@ def apply_kevlar(
              )
              
     if market.rsi > Config.KEVLAR_RSI_HIGH:
-        # Overbought
         if pscore.score < Config.KEVLAR_STRONG_PSCORE:
              return KevlarResult(
                  passed=False,
@@ -86,11 +76,7 @@ def apply_kevlar(
              )
 
     # --- K4: Sentiment Trap ---
-    # Long Trap: Funding > Thr AND Price < VWAP (Crowd Long, Price Bearish) -> BLOCK Longs?
-    # Spec: 
-    # Long trap: Funding > thr AND price < VWAP -> BLOCK
-    # Short trap: Funding < -thr AND price > VWAP -> BLOCK
-    
+    # Long Trap: Funding > Thr AND Price < VWAP (Crowd Long, Price Bearish) -> BLOCK Longs
     funding = sentiment.funding if sentiment.funding is not None else 0.0
     
     # Check Longs (SUPPORT_TEST)
@@ -109,5 +95,5 @@ def apply_kevlar(
                  blocked_by=f"K4_SENTIMENT_SHORT_TRAP (F={funding:.4f}, P>VWAP)"
              )
 
-    # All Refined
+    # All Passed
     return KevlarResult(passed=True, blocked_by=None)
