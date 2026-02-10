@@ -1,76 +1,99 @@
 """
 P-Score Engine.
 Calculates numerical score for trade quality.
-Deterministic formula synced with spec and P1-FIX-01/02.
+STRICT deterministic formula (P1-FIX-01/02).
 """
 
+from typing import Literal, Optional, List
+
 from bot.config import Config
-from bot.decision_models import MarketContext, SentimentContext, PScoreResult
+from bot.decision_models import (
+    MarketContext, 
+    SentimentContext, 
+    PScoreResult,
+    LevelGradeResult,
+    Regime
+)
 
-# Base Score
-BASE_SCORE = 50
-
-# Factors (Synced with P1-FIX-02)
-FACTOR_LEVEL_STRONG = 15
-FACTOR_LEVEL_WEAK = -20
-FACTOR_REGIME_EXPANSION = 10
-FACTOR_REGIME_COMPRESSION = -10
-FACTOR_RSI_COUNTER = 5
-FACTOR_DATA_DEGRADED = -15
+def score_level(sc: float) -> LevelGradeResult:
+    """
+    STRICT grading synced with Pine v3.7:
+      STRONG: sc >= 3.0  -> +15
+      MEDIUM: sc >= 1.0  ->  0
+      WEAK:   sc <  1.0  -> -20
+    NOTE: negative sc is always WEAK.
+    """
+    if sc >= 3.0:
+        return LevelGradeResult("STRONG", +15, f"Level: STRONG (sc={sc:.1f}) +15")
+    if sc >= 1.0:
+        return LevelGradeResult("MEDIUM", 0, f"Level: MEDIUM (sc={sc:.1f}) +0")
+    return LevelGradeResult("WEAK", -20, f"Level: WEAK (sc={sc:.1f}) -20")
 
 
 def calculate_pscore(
-    event: dict,
-    market: MarketContext,
-    sentiment: SentimentContext
+    sc: float,
+    regime: Regime,
+    rsi: float,
+    is_support_event: bool,
+    data_quality_market: Literal["OK", "DEGRADED"],
+    data_quality_sentiment: Literal["OK", "DEGRADED"],
+    volume_high: Optional[bool] = None,  # P1 optional
 ) -> PScoreResult:
     """
-    Calculate P-Score based on factors.
-    Returns Score and Breakdown list.
+    P1 STRICT spec:
+      Base = 50
+      + Level delta (from score_level)
+      + Regime delta: EXPANSION +10, COMPRESSION -10, NEUTRAL 0
+      + RSI context: +5 ONLY if counter-trend at level:
+           Support event and RSI < 35  -> +5
+           Resistance event and RSI > 65 -> +5
+      + Data quality penalty: -15 if ANY of market/sentiment is DEGRADED
+      Volume: optional (keep None in P1 unless implemented deterministically)
     """
-    score = BASE_SCORE
-    breakdown = [f"Base: {BASE_SCORE}"]
+    base = 50
+    breakdown = [f"Base: +50"]
 
-    # --- 1. Level Strength (P1-FIX-01: Grade Sync) ---
-    # Strong >= 3 -> +15
-    # Medium >= 1 -> 0
-    # Weak < 1 -> -20 (includes negative)
-    
-    # We expect 'score' in payload to represent the Pine 'sc' value
-    # (or mapped equivalent if payload differs).
-    # Assuming event['score'] IS the 'sc' value from Pine.
-    
-    level_sc = event.get('score', 0)
-    
-    if level_sc >= 3:
-        score += FACTOR_LEVEL_STRONG
-        breakdown.append(f"Level Strong (sc={level_sc}): +{FACTOR_LEVEL_STRONG}")
-    elif level_sc < 1:
-        score += FACTOR_LEVEL_WEAK
-        breakdown.append(f"Level Weak (sc={level_sc}): {FACTOR_LEVEL_WEAK}")
+    lg = score_level(sc)
+    score = base + lg.delta
+    breakdown.append(lg.label)
+
+    # Regime
+    if regime == "EXPANSION":
+        score += 10
+        breakdown.append("Regime: EXPANSION +10")
+    elif regime == "COMPRESSION":
+        score -= 10
+        breakdown.append("Regime: COMPRESSION -10")
     else:
-        # Medium (1 <= sc < 3) -> Neutral
-        breakdown.append(f"Level Medium (sc={level_sc}): +0")
+        breakdown.append("Regime: NEUTRAL +0")
 
-    # --- 2. Regime (From Market Context) ---
-    # TODO: Implement Regime Mapping (Expansion/Compression)
-    # Current placeholder: Neutral
-    pass
+    # RSI Context (counter-trend only)
+    rsi_delta = 0
+    if is_support_event and rsi < 35:
+        rsi_delta = +5
+        breakdown.append(f"RSI: Counter-trend (RSI={rsi:.1f} < 35) +5")
+    elif (not is_support_event) and rsi > 65:
+        rsi_delta = +5
+        breakdown.append(f"RSI: Counter-trend (RSI={rsi:.1f} > 65) +5")
+    else:
+        breakdown.append(f"RSI: Neutral (RSI={rsi:.1f}) +0")
+    score += rsi_delta
 
-    # --- 3. RSI Context ---
-    # "Counter-trend +5"
-    event_type = event.get('event') 
-    
-    if event_type == "SUPPORT_TEST" and market.rsi < 40:
-        score += FACTOR_RSI_COUNTER
-        breakdown.append(f"RSI Oversold Buy: +{FACTOR_RSI_COUNTER}")
-    elif event_type == "RESISTANCE_TEST" and market.rsi > 60:
-        score += FACTOR_RSI_COUNTER
-        breakdown.append(f"RSI Overbought Sell: +{FACTOR_RSI_COUNTER}")
+    # Data quality
+    if data_quality_market == "DEGRADED" or data_quality_sentiment == "DEGRADED":
+        score -= 15
+        breakdown.append("Data Quality: DEGRADED -15")
+    else:
+        breakdown.append("Data Quality: OK +0")
 
-    # --- 4. Data Quality (P1-FIX-02) ---
-    if market.data_quality == "DEGRADED" or sentiment.data_quality == "DEGRADED":
-        score += FACTOR_DATA_DEGRADED
-        breakdown.append(f"Data Degraded: {FACTOR_DATA_DEGRADED}")
+    # Volume (optional)
+    if volume_high is True:
+        score += 10
+        breakdown.append("Volume: HIGH +10")
+    elif volume_high is False:
+        score -= 10
+        breakdown.append("Volume: LOW -10")
 
+    # Clamp to [0,100]
+    score = max(0, min(100, int(round(score))))
     return PScoreResult(score=score, breakdown=breakdown)
