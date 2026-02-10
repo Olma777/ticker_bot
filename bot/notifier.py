@@ -2,7 +2,7 @@
 Notifier Module.
 Formats and sends Decision Cards to Telegram.
 Strictly implements LOCKED Spec (P1 Final).
-Updated for P1-FINAL-VISUALS: Strict Text & Colors.
+Updated for P1-FINAL-TEXT-CLEANSE: No 'Close' references.
 """
 
 import logging
@@ -23,7 +23,7 @@ def send_decision_card(result: DecisionResult, event: dict):
      - No discretionary text. 
      - Strict colors.
      - "P-SCORE: X / 35"
-     - ENTRY MODE: TOUCH_LIMIT (No 'Close' refs)
+     - ENTRY MODE: TOUCH_LIMIT (No 'Close' refs anywhere)
     """
     if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
         return
@@ -53,7 +53,6 @@ def send_decision_card(result: DecisionResult, event: dict):
              if grade_str == "STRONG": grade_icon = "🟢"
              elif grade_str == "MEDIUM": grade_icon = "🟡"
              elif grade_str == "WEAK": grade_icon = "🔴"
-             # Note: logic for <1 being WEAK is in pscore.py, so here we trust the label.
 
         # P-Score Breakdown
         breakdown_text = "\n".join(result.pscore.breakdown)
@@ -123,6 +122,12 @@ def send_decision_card(result: DecisionResult, event: dict):
             if result.reason and "RRR" in result.reason:
                 lines.append(f"• {result.reason}")
 
+            lines.append("")
+            lines.append("Conditions to change decision:")
+            # STRICT LOGIC only. No "Wait for Close".
+            lines.append(f"• P-SCORE ≥ {Config.P_SCORE_THRESHOLD}")
+            lines.append(f"• Grade must be MEDIUM or STRONG")
+            
             lines.append("")
             # Strict Format: X / 35
             lines.append(f"<b>P-SCORE: {result.pscore.score} / {Config.P_SCORE_THRESHOLD}</b>")
