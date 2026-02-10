@@ -1,34 +1,29 @@
 """
-Kevlar Core.
-Strict filters to block bad trades regardless of score.
-Implemented in purely deterministic logic.
-Updated for P1-Final: K1 Momentum Implemented.
+Kevlar Core (Phase 2).
+Strict filters to block dangerous trades.
 """
 
 from typing import Optional
-
-from bot.config import Config
 from bot.decision_models import (
     MarketContext, 
     SentimentContext, 
-    KevlarResult, 
-    PScoreResult
+    KevlarResult
 )
 
-def apply_kevlar(
+def check_safety(
     event: dict,
     market: MarketContext,
     sentiment: SentimentContext,
-    pscore: PScoreResult
+    p_score: int
 ) -> KevlarResult:
     """
-    Apply Kevlar filters K1-K4 (BLOCKING).
+    Apply Kevlar filters (BLOCKING).
     Returns Passed=True only if ALL filters pass.
     """
     
     # Extract event data
-    event_type = event.get('event') 
-    level_price = event.get('level', 0)
+    event_type = event.get('event', '')
+    level_price = float(event.get('level', 0.0))
     current_price = market.price
     atr = market.atr
     
@@ -37,21 +32,32 @@ def apply_kevlar(
         return KevlarResult(passed=False, blocked_by="K0_NO_ATR")
 
     # --- K1: Momentum Instability ---
-    # BLOCK if abs(close - open) > X * ATR
-    # Requires candle Open. 
-    candle_body = abs(market.price - market.open)
-    max_body = Config.KEVLAR_MOMENTUM_ATR_MULT * atr
+    # 1. Body > 2.0 * ATR
+    candle_body = abs(market.candle_close - market.candle_open)
+    max_body = 2.0 * atr 
     
     if candle_body > max_body:
          return KevlarResult(
              passed=False,
-             blocked_by=f"K1_MOMENTUM_INSTABILITY (Body {candle_body:.2f} > {max_body:.2f})"
+             blocked_by=f"K1_CRASH_SCENARIO (Body {candle_body:.2f} > {max_body:.2f})"
          )
 
+    # 2. "No Brakes" (Long Only): Close in bottom 5% of candle
+    if "SUPPORT" in event_type:
+        candle_range = market.candle_high - market.candle_low
+        if candle_range > 0:
+            # Position of close relative to low (0.0 = Low, 1.0 = High)
+            close_pos = (market.candle_close - market.candle_low) / candle_range
+            if close_pos < 0.05:
+                return KevlarResult(
+                    passed=False,
+                    blocked_by=f"K1_NO_BRAKES (Close @ {close_pos*100:.1f}% of Range)"
+                )
+
     # --- K2: Missed Entry ---
-    # BLOCK if abs(price - level) > Y * ATR
+    # Abs(Price - Level) > 1.5 * ATR
     dist = abs(current_price - level_price)
-    max_dist = Config.KEVLAR_MISSED_ENTRY_ATR_MULT * atr
+    max_dist = 1.5 * atr
     
     if dist > max_dist:
         return KevlarResult(
@@ -60,39 +66,31 @@ def apply_kevlar(
         )
 
     # --- K3: RSI Panic Guard ---
-    # RSI < 20 or > 80: Block unless P-Score >= STRONG
-    if market.rsi < Config.KEVLAR_RSI_LOW:
-        if pscore.score < Config.KEVLAR_STRONG_PSCORE:
+    # If RSI < 20, Require Score >= 60. Else Block.
+    if market.rsi < 20:
+        if p_score < 60:
              return KevlarResult(
                  passed=False,
-                 blocked_by=f"K3_RSI_PANIC (RSI {market.rsi:.1f} < {Config.KEVLAR_RSI_LOW})"
-             )
-             
-    if market.rsi > Config.KEVLAR_RSI_HIGH:
-        if pscore.score < Config.KEVLAR_STRONG_PSCORE:
-             return KevlarResult(
-                 passed=False,
-                 blocked_by=f"K3_RSI_PANIC (RSI {market.rsi:.1f} > {Config.KEVLAR_RSI_HIGH})"
+                 blocked_by=f"K3_RSI_PANIC (RSI {market.rsi:.1f} < 20 & Score {p_score} < 60)"
              )
 
     # --- K4: Sentiment Trap ---
-    # Long Trap: Funding > Thr AND Price < VWAP (Crowd Long, Price Bearish) -> BLOCK Longs
-    funding = sentiment.funding if sentiment.funding is not None else 0.0
+    # Long Trap: Funding > 0.03% AND Price < VWAP (Crowd Long, Price Bearish) -> BLOCK Longs
+    funding = sentiment.funding
     
-    # Check Longs (SUPPORT_TEST)
-    if event_type == "SUPPORT_TEST":
-        if funding > Config.FUNDING_THRESHOLD and current_price < market.vwap:
+    if "SUPPORT" in event_type: # Long Attempt
+        if funding > 0.0003 and current_price < market.vwap:
              return KevlarResult(
                  passed=False,
-                 blocked_by=f"K4_SENTIMENT_LONG_TRAP (F={funding:.4f}, P<VWAP)"
+                 blocked_by=f"K4_SENTIMENT_LONG_TRAP (F={funding*100:.3f}%, P<VWAP)"
              )
 
-    # Check Shorts (RESISTANCE_TEST)
-    if event_type == "RESISTANCE_TEST":
-        if funding < -Config.FUNDING_THRESHOLD and current_price > market.vwap:
+    # Short Trap (Resistance)
+    if "RESISTANCE" in event_type: # Short Attempt
+        if funding < -0.0003 and current_price > market.vwap:
              return KevlarResult(
                  passed=False,
-                 blocked_by=f"K4_SENTIMENT_SHORT_TRAP (F={funding:.4f}, P>VWAP)"
+                 blocked_by=f"K4_SENTIMENT_SHORT_TRAP (F={funding*100:.3f}%, P>VWAP)"
              )
 
     # All Passed

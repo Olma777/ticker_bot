@@ -1,94 +1,80 @@
 """
-P-Score Engine.
-Calculates numerical score for trade quality.
-Deterministic formula synced with LOCKED Specification.
-Updated for P1-FINAL-VISUALS: Strict Color Mapping.
+P-Score Engine (Phase 2).
+Calculates deterministic probability score.
+Formula v2.7 (Spec v2.0).
 """
 
-from bot.config import Config
-from bot.decision_models import MarketContext, SentimentContext, PScoreResult, LevelGradeResult
+from bot.decision_models import MarketContext, SentimentContext, PScoreResult
 
-# Base Score
-BASE_SCORE = 50
-
-# --- LOCKED SPEC (P1 Final) ---
-# Factor        Condition       Delta
-# Level         STRONG          +15
-# Level         WEAK (-ve sc)   -20
-# Regime        EXPANSION       +10
-# Regime        COMPRESSION     -10
-# RSI           Contra(Supp<35/Res>65) +5
-# Data Quality  DEGRADED        -15
-
-def score_level(sc: float) -> LevelGradeResult:
-    """
-    Classify level strength based on Score (sc).
-    LOCKED SPEC (Strict):
-      sc >= 3.0        -> STRONG (Green 🟢)
-      1.0 <= sc < 3.0  -> MEDIUM (Yellow 🟡)
-      sc < 1.0         -> WEAK (Red 🔴)
-      
-    No exceptions. -0.8 is WEAK/Red.
-    """
-    if sc >= 3.0:
-        return LevelGradeResult("STRONG", +15, "🟢")
-    elif sc >= 1.0:
-        return LevelGradeResult("MEDIUM", +0, "🟡")
-    else:
-        # Strictly applies to sc < 1.0 (inc. negatives)
-        return LevelGradeResult("WEAK", -20, "🔴")
-
-
-def calculate_pscore(
-    sc: float,
-    regime: str,  # EXPANSION / NEUTRAL / COMPRESSION
-    rsi: float,
-    is_support_event: bool,
-    data_quality_market: str,
-    data_quality_sentiment: str,
-    volume_high: bool = None
+def calculate_score(
+    event: dict,
+    market: MarketContext,
+    sentiment: SentimentContext
 ) -> PScoreResult:
     """
-    Calculate deterministic P-Score.
+    Calculate P-Score (0-100).
     """
-    score = BASE_SCORE
-    breakdown = []
+    score = 50
+    breakdown = ["Base: 50"]
     
-    # 1. Level Factor (LOCKED)
-    lvl_res = score_level(sc)
-    score += lvl_res.delta
-    breakdown.append(f"Base: {BASE_SCORE}")
-    breakdown.append(f"Level ({lvl_res.grade}): {lvl_res.delta:+}")
+    # 1. Level Strength
+    # Strong (Sc >= 1): +15
+    # Weak (Sc < 0): -20
+    # Ghost (Sc < -10): Automatic Wait (Handled via low score)
+    sc = float(event.get('score', 0))
+    
+    if sc < -10:
+        score = 0
+        breakdown.append(f"Ghost Level (Sc {sc}): FORCE WAIT")
+        return PScoreResult(0, breakdown) # Kill immediately
+        
+    if sc >= 1.0:
+        score += 15
+        breakdown.append(f"Level Strong ({sc}): +15")
+    elif sc < 0.0:
+        score -= 20
+        breakdown.append(f"Level Weak ({sc}): -20")
+    else:
+        breakdown.append(f"Level Moderate ({sc}): +0")
 
-    # 2. Regime Factor (LOCKED)
-    if regime == "EXPANSION":
+    # 2. Regime (BTC)
+    # Expansion: +10
+    # Neutral/Compression: -10
+    if market.regime == "EXPANSION":
         score += 10
         breakdown.append("Regime (EXP): +10")
-    elif regime == "COMPRESSION":
-        score -= 10
-        breakdown.append("Regime (CMP): -10")
     else:
-        breakdown.append("Regime (NEU): +0")
+        score -= 10
+        breakdown.append(f"Regime ({market.regime}): -10")
 
-    # 3. RSI Context (LOCKED)
+    # 3. Volume/Sentiment
+    # High (Hot): +10
+    # Low (Cold): -10
+    if sentiment.is_hot:
+        score += 10
+        breakdown.append("Sentiment (HOT): +10")
+    else:
+        score -= 10
+        breakdown.append("Sentiment (COLD): -10")
+
+    # 4. RSI Context
+    # Counter-trend extreme: +5
     # Support & RSI < 35 -> +5
     # Resistance & RSI > 65 -> +5
+    event_type = event.get('event', '')
+    is_support = "SUPPORT" in event_type
+    
     rsi_bonus = 0
-    if is_support_event and rsi < 35:
+    if is_support and market.rsi < 35:
         rsi_bonus = 5
         breakdown.append("RSI (Oversold): +5")
-    elif not is_support_event and rsi > 65:
+    elif not is_support and market.rsi > 65:
         rsi_bonus = 5
         breakdown.append("RSI (Overbought): +5")
     
     score += rsi_bonus
 
-    # 4. Data Quality (LOCKED)
-    if data_quality_market == "DEGRADED" or data_quality_sentiment == "DEGRADED":
-        score -= 15
-        breakdown.append("Data (Degraded): -15")
-
-    # Final logic
+    # Clamp 0-100
     if score < 0: score = 0
     if score > 100: score = 100
     

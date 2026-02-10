@@ -1,70 +1,54 @@
 """
-Sentiment Data Component.
+Sentiment Module (Phase 2).
 Fetches Funding Rate and Open Interest.
 """
 
 import logging
-import asyncio
-from typing import Optional
-
 import ccxt.async_support as ccxt
-
-from bot.config import Config, EXCHANGE_OPTIONS
+from bot.config import EXCHANGE_OPTIONS
 from bot.decision_models import SentimentContext
 
-logger = logging.getLogger("DecisionEngine-Sentiment")
+logger = logging.getLogger(__name__)
 
 
-async def load_sentiment(symbol: str) -> SentimentContext:
+async def get_sentiment(symbol: str) -> SentimentContext:
     """
-    Fetches Funding Rate and Open Interest.
-    Returns SentimentContext.
+    Fetch Funding and OI.
     """
     exchange_id = "binance"
     options = EXCHANGE_OPTIONS.get(exchange_id, {})
+    exchange_class = getattr(ccxt, exchange_id)
     
-    try:
-        exchange_class = getattr(ccxt, exchange_id)
-        async with exchange_class(options) as exchange:
-            # Parallel fetch
-            funding_task = exchange.fetch_funding_rate(symbol)
-            ticker_task = exchange.fetch_ticker(symbol)  # Often contains Open Interest
+    async with exchange_class(options) as exchange:
+        try:
+            formatted_symbol = symbol.upper()
+            if "/" not in formatted_symbol:
+                formatted_symbol += "/USDT"
+                
+            # Fetch Funding
+            funding_resp = await exchange.fetch_funding_rate(formatted_symbol)
+            funding = float(funding_resp['fundingRate']) if funding_resp else 0.0
             
+            # Fetch OI
             try:
-                # Funding Rate
-                funding_data = await funding_task
-                funding_rate = funding_data.get('fundingRate')
+                oi_resp = await exchange.fetch_open_interest(formatted_symbol)
+                oi = float(oi_resp['openInterestAmount']) if oi_resp else 0.0
+            except Exception:
+                oi = 0.0 # Not all pairs support OI
                 
-                # Open Interest (Try ticker first, might need specific endpoint)
-                # Note: CCXT mapping varies. For Binance valid.
-                # If ticker doesn't have it, we accept None.
-                # Ideally use fetch_open_interest if supported.
-                open_interest = None
-                if exchange.has['fetchOpenInterest']:
-                     oi_data = await exchange.fetch_open_interest(symbol)
-                     open_interest = oi_data.get('openInterestValue') # Quote currency value
-                
-                if funding_rate is None:
-                     raise ValueError("Funding rate missing")
-
-                return SentimentContext(
-                    funding=funding_rate,
-                    open_interest=open_interest,
-                    data_quality="OK"
-                )
-
-            except Exception as inner_e:
-                logger.warning(f"Partial sentiment fail for {symbol}: {inner_e}")
-                return SentimentContext(
-                    funding=None,
-                    open_interest=None,
-                    data_quality="DEGRADED"
-                )
-                
-    except Exception as e:
-        logger.error(f"Failed to fetch sentiment for {symbol}: {e}")
-        return SentimentContext(
-            funding=None,
-            open_interest=None,
-            data_quality="DEGRADED"
-        )
+            # Basic "Hot" logic (Placeholder)
+            # Real implementation would compare to Avg OI, but for now:
+            is_hot = False 
+            
+            return SentimentContext(
+                funding=funding,
+                open_interest=oi,
+                is_hot=is_hot,
+                data_quality="OK"
+            )
+            
+        except Exception as e:
+            logger.error(f"Sentiment Error {symbol}: {e}")
+            return SentimentContext(
+                funding=0.0, open_interest=0.0, is_hot=False, data_quality="DEGRADED"
+            )
