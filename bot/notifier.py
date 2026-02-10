@@ -2,6 +2,7 @@
 Notifier Module.
 Formats and sends Decision Cards to Telegram.
 Strictly implements LOCKED Spec (P1 Final).
+Updated for P1-FINAL-VISUALS: Strict Text & Colors.
 """
 
 import logging
@@ -18,7 +19,11 @@ logger = logging.getLogger("DecisionEngine-Notifier")
 def send_decision_card(result: DecisionResult, event: dict):
     """
     Send strictly formatted Decision Card.
-    LOCKED SPEC: No discretionary text. Strict colors.
+    LOCKED SPEC: 
+     - No discretionary text. 
+     - Strict colors.
+     - "P-SCORE: X / 35"
+     - ENTRY MODE: TOUCH_LIMIT (No 'Close' refs)
     """
     if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
         return
@@ -39,14 +44,16 @@ def send_decision_card(result: DecisionResult, event: dict):
         
         level_side = "SUPPORT" if "SUPPORT" in event_str else "RESISTANCE"
         
-        # Grade Color strictly (LOCKED)
+        # Grade Color strictly (LOCKED VIA Model Logic, displayed here)
         grade_str = "N/A"
         grade_icon = "⚪"
         if result.level_grade:
              grade_str = result.level_grade.grade
+             # Icons determined by String Grade
              if grade_str == "STRONG": grade_icon = "🟢"
              elif grade_str == "MEDIUM": grade_icon = "🟡"
              elif grade_str == "WEAK": grade_icon = "🔴"
+             # Note: logic for <1 being WEAK is in pscore.py, so here we trust the label.
 
         # P-Score Breakdown
         breakdown_text = "\n".join(result.pscore.breakdown)
@@ -84,7 +91,8 @@ def send_decision_card(result: DecisionResult, event: dict):
         if result.decision == "TRADE":
             lines.append(f"<b>DECISION: TRADE ✅ ({result.side})</b>")
             lines.append("")
-            lines.append(f"Entry Mode: {result.entry_mode}")
+            # Strict Text: TOUCH_LIMIT only.
+            lines.append(f"Entry Mode: {Config.ENTRY_MODE}") 
             
             if result.risk:
                 r = result.risk
@@ -97,6 +105,7 @@ def send_decision_card(result: DecisionResult, event: dict):
                 lines.append(f"RRR (TP2): {r.rrr_tp2:.2f}")
             
             lines.append("")
+            # Strict Format: X / 35
             lines.append(f"<b>P-SCORE: {result.pscore.score} / {Config.P_SCORE_THRESHOLD}</b>")
             lines.append(f"Kevlar: PASSED ✅")
 
@@ -108,12 +117,14 @@ def send_decision_card(result: DecisionResult, event: dict):
                 lines.append(f"• Kevlar: {result.kevlar.blocked_by}")
             
             if result.pscore.score < Config.P_SCORE_THRESHOLD:
+                # Strict Format: X / 35
                 lines.append(f"• P-SCORE below threshold ({result.pscore.score} / {Config.P_SCORE_THRESHOLD})")
                 
             if result.reason and "RRR" in result.reason:
                 lines.append(f"• {result.reason}")
 
             lines.append("")
+            # Strict Format: X / 35
             lines.append(f"<b>P-SCORE: {result.pscore.score} / {Config.P_SCORE_THRESHOLD}</b>")
 
         # Breakdown (Always show)

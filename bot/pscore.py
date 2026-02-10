@@ -2,6 +2,7 @@
 P-Score Engine.
 Calculates numerical score for trade quality.
 Deterministic formula synced with LOCKED Specification.
+Updated for P1-FINAL-VISUALS: Strict Color Mapping.
 """
 
 from bot.config import Config
@@ -22,17 +23,19 @@ BASE_SCORE = 50
 def score_level(sc: float) -> LevelGradeResult:
     """
     Classify level strength based on Score (sc).
-    LOCKED SPEC:
-      sc >= 3.0        -> STRONG (Green)
-      1.0 <= sc < 3.0  -> MEDIUM (Yellow)
-      sc < 1.0         -> WEAK (Red)
+    LOCKED SPEC (Strict):
+      sc >= 3.0        -> STRONG (Green 🟢)
+      1.0 <= sc < 3.0  -> MEDIUM (Yellow 🟡)
+      sc < 1.0         -> WEAK (Red 🔴)
+      
+    No exceptions. -0.8 is WEAK/Red.
     """
     if sc >= 3.0:
         return LevelGradeResult("STRONG", +15, "🟢")
     elif sc >= 1.0:
         return LevelGradeResult("MEDIUM", +0, "🟡")
     else:
-        # Includes all negative scores
+        # Strictly applies to sc < 1.0 (inc. negatives)
         return LevelGradeResult("WEAK", -20, "🔴")
 
 
