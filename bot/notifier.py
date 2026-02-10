@@ -1,6 +1,7 @@
 """
 Notifier Module.
 Formats and sends Decision Cards to Telegram.
+Updated for P1-FIX-04 Risk Transparency.
 """
 
 import logging
@@ -16,7 +17,7 @@ logger = logging.getLogger("DecisionEngine-Notifier")
 def send_decision_card(result: DecisionResult, event: dict):
     """
     Send formatted decision card to Telegram using requests (Sync).
-    Currently sync to run in BackgroundTasks easily.
+    Includes Risk Transparency (P1-FIX-04).
     """
     if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
         return
@@ -41,11 +42,22 @@ def send_decision_card(result: DecisionResult, event: dict):
         lines.append(f"Event: {event_type}")
         
         if result.decision == "TRADE":
-            # Trade Details (Placeholder for real entry calculation)
-            # In Phase 2 P1 we just show the signal, execution is Phase 3
+            # Trade Details + Risk (P1-FIX-04)
             lines.append(f"Reason: {result.reason}")
             lines.append(f"P-Score: {result.pscore.score}")
             lines.append(f"Kevlar: PASSED")
+            
+            if result.risk:
+                r = result.risk
+                lines.append("")
+                lines.append("<b>Risk Analysis:</b>")
+                lines.append(f"• Entry: {r.entry_price:.4f}")
+                lines.append(f"• Stop: {r.stop_loss:.4f} ({r.stop_dist_pct:.2f}%)")
+                lines.append(f"• Risk: ${r.risk_amount:.2f}")
+                lines.append(f"• Size: {r.position_size:.4f} {symbol.split('/')[0]}")
+                lines.append(f"• Lev: {r.leverage:.2f}x")
+                if not r.fee_included:
+                    lines.append("<i>(Fees not included)</i>")
         else:
             # Wait Details
             lines.append(f"Reason: {result.reason}")

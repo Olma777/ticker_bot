@@ -45,10 +45,24 @@ class PScoreResult:
 
 
 @dataclass
+class RiskContext:
+    """Risk management calculations (P1-FIX-04)."""
+    entry_price: float
+    stop_loss: float
+    stop_dist: float
+    stop_dist_pct: float
+    risk_amount: float     # $ Risk
+    position_size: float   # In Asset (e.g. BTC)
+    leverage: float        # Implied leverage based on capital
+    fee_included: bool
+
+
+@dataclass
 class DecisionResult:
     """Final decision from the engine."""
     decision: DecisionType
     side: Optional[SideType]
     pscore: PScoreResult
     kevlar: KevlarResult
+    risk: Optional[RiskContext]  # Added for FIX-04
     reason: str
