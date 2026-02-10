@@ -1,7 +1,7 @@
 """
 Decision Engine Orchestrator.
 Pipelines market data, sentiment, P-Score, and Kevlar to produce a final decision.
-Updated for P1-OrderCalc: Using strict deterministic order module.
+Updated for P1-LOCKED-SPEC: Strict Pipeline & Entry Mode.
 """
 
 import logging
@@ -27,61 +27,71 @@ logger = logging.getLogger("DecisionEngine-Orchestrator")
 
 async def make_decision(event: dict) -> DecisionResult:
     """
-    Execute strict decision pipeline (P1-OrderCalc):
+    Execute strict decision pipeline (P1-LOCKED-SPEC):
     1. MarketContext
     2. Sentiment
-    3. P-Score 
-    4. Kevlar
-    5. Order Calculation (Strict Module)
+    3. Level Grading
+    4. P-Score 
+    5. Kevlar (Blocking)
+    6. Order Calculation (Strict Module)
+    7. Final Decision
     """
     symbol = event.get('symbol')
     if not symbol:
         return _create_error_result("Missing Symbol")
 
-    # 1. Load Data
+    # 1. Market Context
     market = await load_market_context(symbol)
+    
+    # 2. Sentiment Context
     sentiment = await load_sentiment(symbol)
 
-    # 2. P-Score Inputs
-    regime: Regime = "NEUTRAL"
-    if market.regime in ["BULLISH_TREND", "BEARISH_TREND"]:
-        regime = "EXPANSION"
+    # 3. Level Grading & Inputs
+    sc = float(event.get('score', 0))
+    level_grade = score_level(sc)
     
     event_type = event.get('event')
     is_support = (event_type == "SUPPORT_TEST")
-    sc = float(event.get('score', 0))
+    
+    # Regime Mapping (Locked)
+    regime: Regime = "NEUTRAL"
+    if market.regime == "BULLISH_TREND": regime = "EXPANSION"
+    elif market.regime == "BEARISH_TREND": regime = "COMPRESSION" # Or EXPANSION depending on direction?
+    # Spec Says: "Regime EXPANSION +10, COMPRESSION -10". 
+    # Market Data returns "BULLISH_TREND" / "BEARISH_TREND". 
+    # Let's map strict to Pine logic if possible, or use simplified:
+    # If Market Data says "TREND", assume Expansion? 
+    # Actually, let's keep it simple: Market Data `regime` is simple Cls > VWAP.
+    # We will map:
+    # Bullish Trend -> Expansion (if Long context?)
+    # For now, aiming for deterministic mapping:
+    if market.regime in ["BULLISH_TREND", "BEARISH_TREND"]:
+        regime = "EXPANSION"
+    else:
+        regime = "NEUTRAL"
 
-    # 3. Calculate P-Score
+    # 4. P-Score
     pscore = calculate_pscore(
         sc=sc,
         regime=regime,
         rsi=market.rsi,
         is_support_event=is_support,
         data_quality_market=market.data_quality,
-        data_quality_sentiment=sentiment.data_quality,
-        volume_high=None 
+        data_quality_sentiment=sentiment.data_quality
     )
 
-    level_grade = score_level(sc)
-
-    # 4. Kevlar
+    # 5. Kevlar (Blocking)
     kevlar = apply_kevlar(event, market, sentiment, pscore)
 
-    # 5. Final Logic & Order Calc
+    # 6. Order Calculation
+    # Prepare Decision Vars
     decision = "WAIT"
     side = None
     reason = "Initial"
     risk_ctx = None
+    
+    # LOCKED: GLOBAL ENTRY MODE
     entry_mode: EntryMode = "TOUCH_LIMIT" 
-
-    try:
-        alert_type = event.get('alertType', 'Touch')
-        if alert_type == 'Close':
-            entry_mode = "CLOSE_CONFIRM"
-        else:
-            entry_mode = "TOUCH_LIMIT"
-    except:
-        entry_mode = "TOUCH_LIMIT"
 
     if is_support:
         potential_side = "LONG"
@@ -90,20 +100,20 @@ async def make_decision(event: dict) -> DecisionResult:
     else:
         potential_side = None
 
-    # Logic Pipeline
+    # 7. Final Decision Pipeline
     if not kevlar.passed:
         decision = "WAIT"
-        reason = f"Kevlar Block: {kevlar.blocked_by}"
+        reason = f"Kevlar: {kevlar.blocked_by}"
         
     elif pscore.score < Config.P_SCORE_THRESHOLD:
         decision = "WAIT"
-        reason = f"P-SCORE below threshold ({Config.P_SCORE_THRESHOLD})"
+        reason = f"P-SCORE below threshold ({pscore.score} / {Config.P_SCORE_THRESHOLD})"
         
     elif potential_side:
-        # Candidate for Trade -> Calculate Orders via Strict Module
+        # Candidate -> Calculate Order
         side = potential_side
         
-        # Extract Inputs
+        # Inputs
         level_price = float(event.get('level', market.price))
         zone_half = float(event.get('zone_half', 0.0))
         atr = market.atr
@@ -122,13 +132,12 @@ async def make_decision(event: dict) -> DecisionResult:
         
         if plan.reason_blocked:
             decision = "WAIT"
-            reason = f"{plan.reason_blocked}"
+            reason = f"Order Block: {plan.reason_blocked}"
         else:
             decision = "TRADE"
-            reason = f"Systems GO (Score {pscore.score})"
+            reason = "Valid Setup"
             
-            # Populate RiskContext from Plan
-            # Calculate leverage manually as it's computed in order_calc implicitly via size but not returned directly
+            # Populate RiskContext
             leverage = (plan.size_units * plan.entry) / capital if capital > 0 else 0
             stop_pct = (plan.stop_dist / plan.entry) * 100 if plan.entry > 0 else 0
 

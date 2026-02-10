@@ -1,7 +1,7 @@
 """
 Notifier Module.
 Formats and sends Decision Cards to Telegram.
-Strictly implements Reference Template (P1-FIX).
+Strictly implements LOCKED Spec (P1 Final).
 """
 
 import logging
@@ -18,6 +18,7 @@ logger = logging.getLogger("DecisionEngine-Notifier")
 def send_decision_card(result: DecisionResult, event: dict):
     """
     Send strictly formatted Decision Card.
+    LOCKED SPEC: No discretionary text. Strict colors.
     """
     if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
         return
@@ -37,10 +38,15 @@ def send_decision_card(result: DecisionResult, event: dict):
         touches = event.get('touches', 0)
         
         level_side = "SUPPORT" if "SUPPORT" in event_str else "RESISTANCE"
+        
+        # Grade Color strictly (LOCKED)
+        grade_str = "N/A"
+        grade_icon = "⚪"
         if result.level_grade:
              grade_str = result.level_grade.grade
-        else:
-             grade_str = "N/A"
+             if grade_str == "STRONG": grade_icon = "🟢"
+             elif grade_str == "MEDIUM": grade_icon = "🟡"
+             elif grade_str == "WEAK": grade_icon = "🔴"
 
         # P-Score Breakdown
         breakdown_text = "\n".join(result.pscore.breakdown)
@@ -51,24 +57,18 @@ def send_decision_card(result: DecisionResult, event: dict):
             rsi_val = f"{m.rsi:.1f}"
             vwap_val = f"{m.vwap:.2f}"
             atr_val = f"{m.atr:.2f}"
-            vs_vwap = "ABOVE" if m.price > m.vwap else "BELOW"
-            dq_market = m.data_quality
         else:
             rsi_val = "N/A"
             vwap_val = "N/A"
             atr_val = "N/A"
-            vs_vwap = "N/A"
-            dq_market = "N/A"
             
         if result.sentiment_context:
             s = result.sentiment_context
             fund_val = f"{s.funding:.4f}%" if s.funding is not None else "N/A"
             oi_val = f"{s.open_interest:.2f}" if s.open_interest is not None else "N/A"
-            dq_sent = s.data_quality
         else:
             fund_val = "N/A"
             oi_val = "N/A"
-            dq_sent = "N/A"
 
         # --- Template Construction ---
         
@@ -76,69 +76,63 @@ def send_decision_card(result: DecisionResult, event: dict):
         
         # Header
         lines.append(f"📊 <b>{symbol} | {tf} SNIPER</b>")
-        lines.append(f"🕒 Event: {event_str} | bar_time: {bar_time_str}")
+        lines.append(f"🕒 Event: {event_str} | Time: {bar_time_str}")
         lines.append(f"💰 Price: {current_price}")
         lines.append("")
 
-        # Decision Block
+        # Decision Block (LOCKED FORMAT)
         if result.decision == "TRADE":
             lines.append(f"<b>DECISION: TRADE ✅ ({result.side})</b>")
-            lines.append(f"Entry Mode: {result.entry_mode}")
             lines.append("")
+            lines.append(f"Entry Mode: {result.entry_mode}")
             
             if result.risk:
                 r = result.risk
                 lines.append(f"Entry: {r.entry_price:.4f}")
-                lines.append(f"SL: {r.stop_loss:.4f}  (StopDist={r.stop_dist:.4f} | Risk=${r.risk_amount:.2f})")
+                lines.append(f"SL: {r.stop_loss:.4f}")
                 lines.append(f"TP1: {r.tp1:.4f} | TP2: {r.tp2:.4f} | TP3: {r.tp3:.4f}")
-                lines.append(f"Size: {r.position_size:.4f}")
-                lines.append(f"RRR (to TP2): {r.rrr_tp2:.2f}")
+                lines.append(f"StopDist: {r.stop_dist:.4f}")
+                lines.append(f"Risk: ${r.risk_amount:.2f}")
+                lines.append(f"Size: {r.position_size:.4f} (Risk / StopDist)")
+                lines.append(f"RRR (TP2): {r.rrr_tp2:.2f}")
             
             lines.append("")
-            lines.append(f"<b>P-SCORE: {result.pscore.score}/{Config.P_SCORE_THRESHOLD}</b>")
-            lines.append("Breakdown:")
-            lines.append(f"<pre>{breakdown_text}</pre>")
-            lines.append("")
-            lines.append("Kevlar: PASSED ✅")
+            lines.append(f"<b>P-SCORE: {result.pscore.score} / {Config.P_SCORE_THRESHOLD}</b>")
+            lines.append(f"Kevlar: PASSED ✅")
 
         elif result.decision == "WAIT":
-            icon = "❌"
+            lines.append(f"<b>DECISION: WAIT ❌</b>")
+            lines.append("")
+            lines.append(f"Reason:")
             if not result.kevlar.passed:
-                lines.append(f"<b>DECISION: WAIT {icon}</b>")
-                lines.append(f"Blocked by Kevlar: {result.kevlar.blocked_by}")
-            else:
-                lines.append(f"<b>DECISION: WAIT {icon}</b>")
-                lines.append(f"Reason: {result.reason}")
+                lines.append(f"• Kevlar: {result.kevlar.blocked_by}")
+            
+            if result.pscore.score < Config.P_SCORE_THRESHOLD:
+                lines.append(f"• P-SCORE below threshold ({result.pscore.score} / {Config.P_SCORE_THRESHOLD})")
+                
+            if result.reason and "RRR" in result.reason:
+                lines.append(f"• {result.reason}")
 
             lines.append("")
-            lines.append(f"<b>P-SCORE: {result.pscore.score}/{Config.P_SCORE_THRESHOLD}</b>")
-            lines.append("Breakdown:")
-            lines.append(f"<pre>{breakdown_text}</pre>")
+            lines.append(f"<b>P-SCORE: {result.pscore.score} / {Config.P_SCORE_THRESHOLD}</b>")
+
+        # Breakdown (Always show)
+        lines.append("Score Breakdown:")
+        lines.append(f"<pre>{breakdown_text}</pre>")
 
         # Level Info
         lines.append("")
-        lines.append("<b>Level:</b>")
-        lines.append(f"• Type: {level_side} | Level: {level_price} | Zone: ±{zone_half}")
-        lines.append(f"• sc={sc} → grade={grade_str} | touches={touches}")
+        lines.append("<b>Level Analysis:</b>")
+        lines.append(f"• Grade: {grade_icon} {grade_str}")
+        lines.append(f"• Score: {sc} | Touches: {touches}")
+        lines.append(f"• Zone: {level_price} ± {zone_half}")
 
         # Market Context
         lines.append("")
-        lines.append("<b>Market:</b>")
-        lines.append(f"• ATR={atr_val} | RSI={rsi_val}")
-        lines.append(f"• VWAP={vwap_val} | Price vs VWAP: {vs_vwap}")
-        
-        # Sentiment
-        lines.append("<b>Sentiment:</b>")
-        lines.append(f"• Funding={fund_val} | OI={oi_val}")
-        lines.append(f"Data Quality: {dq_market}/{dq_sent}")
-        
-        # Cancel rules (Static for P1)
-        if result.decision == "TRADE":
-             missed_entry_mult = getattr(Config, 'KEVLAR_MISSED_ENTRY_ATR_MULT', 1.0)
-             lines.append("")
-             lines.append("Cancel if:")
-             lines.append(f"• Missed Entry: |price-level| > {missed_entry_mult}*ATR")
-             lines.append(f"• Next bar violates Kevlar")
+        lines.append("<b>Market Context:</b>")
+        lines.append(f"• ATR: {atr_val} | RSI: {rsi_val}")
+        lines.append(f"• VWAP: {vwap_val}")
+        lines.append(f"• Funding: {fund_val} | OI: {oi_val}")
 
         message = "\n".join(lines)
         

@@ -1,7 +1,7 @@
 """
 Centralized configuration for Market Lens Bot.
 All settings, constants, and shared configurations in one place.
-Updated for P1-FIX (Strict Order Calc).
+Updated for P1-LOCKED-SPEC.
 """
 
 import os
@@ -19,7 +19,7 @@ DATA_DIR = BOT_DIR / "data"
 DB_PATH = DATA_DIR / "users.db"
 
 
-# --- TRADING SETTINGS (SYNCED WITH PINE v3.7) ---
+# --- TRADING SETTINGS (SYNCED WITH PINE v3.7 - LOCKED) ---
 @dataclass(frozen=True)
 class TradingSettings:
     """Trading parameters synced with Pine Script v3.7."""
@@ -41,7 +41,8 @@ class TradingSettings:
     p_score_threshold: int = 35
     funding_threshold: float = 0.0003
     
-    # --- P1-FIX-OrderCalc (Strict Formulas) ---
+    # --- P1-FIX-OrderCalc (Strict Formulas - LOCKED) ---
+    entry_mode: str = "TOUCH_LIMIT" # GLOBAL LOCK
     sl_buffer_atr: float = 0.25
     tp1_atr: float = 0.75
     tp2_atr: float = 1.25
@@ -123,7 +124,8 @@ class Config:
     P_SCORE_THRESHOLD = 35
     FUNDING_THRESHOLD = 0.0003
     
-    # --- P1-FIX-OrderCalc Defaults ---
+    # --- P1-LOCKED ---
+    ENTRY_MODE = "TOUCH_LIMIT"
     DEFAULT_CAPITAL = 1000.0
     DEFAULT_RISK_PCT = 1.0
     MIN_RRR = TRADING.min_rrr
