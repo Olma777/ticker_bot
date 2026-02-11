@@ -120,6 +120,8 @@ class Config:
     WA_DECAY = 0.35
     TMIN = 5
     ZONE_WIDTH_MULT = 0.5
+    MAX_DIST_PCT = 30.0          # <-- ADDED HOTFIX
+    
     # --- RISK & LOGIC (NEW: SINGLE SOURCE OF TRUTH) ---
     P_SCORE_THRESHOLD = 35
     FUNDING_THRESHOLD = 0.0003

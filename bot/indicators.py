@@ -153,7 +153,7 @@ async def fetch_open_interest(exchange: ccxt.Exchange, symbol: str) -> float:
         return 0.0
 
 
-def process_levels(df: pd.DataFrame, max_dist_pct: float = Config.MAX_DIST_PCT) -> tuple[List[dict], List[dict]]:
+def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[dict], List[dict]]:
     """
     Process support and resistance levels (Legacy for /sniper).
     Synchronized with Pine Script v3.7 Logic.
