@@ -5,6 +5,7 @@ Formats Decision Result into graphical card.
 
 import logging
 import re
+import html
 from typing import Union, List, Dict, Any
 from bot.decision_models import DecisionResult
 
@@ -135,22 +136,107 @@ def _format_signal_block(result: DecisionResult) -> str:
     Returns:
         Formatted signal block
     """
+    # Use direction from result if available, otherwise determine from entry vs level
+    direction = result.direction if result.direction else "LONG" if result.entry > result.level else "SHORT" if result.entry > 0 else "UNKNOWN"
+    side_icon = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
+    
     if result.decision == "TRADE":
-        # Format TRADE signal with aligned prices
+        # Format TRADE signal with aligned prices and emojis
         entry_str = f"<code>${result.entry:,.2f}</code>"
         stop_str = f"<code>${result.stop_loss:,.2f}</code>"
         tp1_str = f"<code>${result.tp_targets[0]:,.2f}</code>" if len(result.tp_targets) > 0 else "N/A"
-        tp2_str = f"<code>${result.tp_targets[1]:,.2f}</code>" if len(result.tp_targets) > 1 else "N/A"
         
-        return f"🚀 <b>SIGNAL: {result.direction.upper()}</b>\n" + \
-               f"Entry:  {entry_str}\n" + \
-               f"Stop:   {stop_str}\n" + \
-               f"TP1:    {tp1_str}\n" + \
-               f"TP2:    {tp2_str}"
+        # Calculate RRR if we have entry and stop
+        rrr = 0.0
+        if result.entry > 0 and result.stop_loss > 0:
+            risk = abs(result.entry - result.stop_loss)
+            reward = abs(result.tp_targets[0] - result.entry) if len(result.tp_targets) > 0 else 0
+            rrr = reward / risk if risk > 0 else 0
+        
+        return f"🚀 <b>SIGNAL: {direction}</b> {side_icon}\n" + \
+               f"🚪 Entry: {entry_str}\n" + \
+               f"🛡 Stop:  {stop_str}\n" + \
+               f"🎯 Target: {tp1_str}\n" + \
+               f"⚖️ RRR:   {rrr:.2f}"
     else:
-        # Format WAIT signal
-        return f"� <b>DECISION: WAIT</b>\n" + \
-               f"Reason: {result.reason}"
+        # Format WAIT signal - hide Entry/Stop/TP, show CONDITION block
+        clean_reason = html.escape(result.reason)
+        
+        # Add context information if available
+        context_lines = []
+        if result.market_context:
+            price = result.market_context.price
+            vwap = result.market_context.vwap
+            if price > 0 and vwap > 0:
+                dist_vwap = ((price - vwap) / vwap) * 100
+                context_lines.append(f"• Price is {dist_vwap:+.1f}% {'above' if price > vwap else 'below'} VWAP")
+            
+            if result.market_context.supports and len(result.market_context.supports) > 0:
+                nearest_support = result.market_context.supports[0]['price']
+                dist_support = ((price - nearest_support) / price) * 100
+                context_lines.append(f"• {dist_support:+.1f}% from nearest support")
+        
+        context_text = "\n".join(context_lines) if context_lines else ""
+        
+        return f"⛔ <b>DECISION: WAIT</b>\n" + \
+               f"• Reason: {clean_reason}" + \
+               (f"\n{context_text}" if context_text else "")
+
+
+def _format_market_logic(market_context) -> str:
+    """
+    Format market logic block with regime and analysis.
+    
+    Args:
+        market_context: MarketContext object
+        
+    Returns:
+        Formatted market logic block or empty string
+    """
+    if not market_context:
+        return ""
+    
+    # Translate regime to Russian
+    regime_map = {
+        "EXPANSION": "📈 <b>ЭКСПАНСИЯ</b>",
+        "COMPRESSION": "📉 <b>СЖАТИЕ</b>",
+        "NEUTRAL": "⚪ <b>НЕЙТРАЛЬНО</b>"
+    }
+    regime_text = regime_map.get(market_context.regime, f"<b>{market_context.regime}</b>")
+    
+    # Create bullet points based on context
+    bullets = []
+    
+    # RSI condition
+    rsi = market_context.rsi
+    if rsi < 30:
+        bullets.append("• RSI в зоне перепроданности")
+    elif rsi > 70:
+        bullets.append("• RSI в зоне перекупленности")
+    else:
+        bullets.append("• RSI в нейтральной зоне")
+    
+    # Volatility (ATR)
+    atr = market_context.atr
+    if atr > market_context.price * 0.02:  # 2% volatility
+        bullets.append("• Высокая волатильность")
+    elif atr < market_context.price * 0.005:  # 0.5% volatility
+        bullets.append("• Низкая волатильность")
+    
+    # Price relative to VWAP
+    if market_context.price > market_context.vwap * 1.01:
+        bullets.append("• Цена выше VWAP (бычий сигнал)")
+    elif market_context.price < market_context.vwap * 0.99:
+        bullets.append("• Цена ниже VWAP (медвежий сигнал)")
+    
+    # Data quality
+    if market_context.data_quality == "DEGRADED":
+        bullets.append("• ⚠️ Качество данных снижено")
+    
+    # Build the block
+    lines = ["🧠 <b>MARKET LOGIC:</b>", regime_text]
+    lines.extend(bullets)
+    return "\n".join(lines)
 
 
 def format_telegram_message(result: DecisionResult, 
@@ -173,22 +259,33 @@ def format_telegram_message(result: DecisionResult,
     """
     try:
         # HEADER - Compact header with symbol and price
-        symbol = result.symbol
-        price = result.market_context.price if result.market_context else 0.0
-        price_change = result.market_context.price_change_24h if result.market_context else 0.0
+        symbol = html.escape(result.symbol)
         
-        header = f"💎 <b>{symbol}</b>\n" + \
-                 f"💰 ${price:,.2f} ({price_change:+.2f}%)"
+        # Only show price if market context is available
+        if result.market_context and hasattr(result.market_context, 'price') and result.market_context.price > 0:
+            price = result.market_context.price
+            price_change = getattr(result.market_context, 'price_change_24h', 0.0)
+            header = f"💎 <b>{symbol}</b>\n" + \
+                     f"💰 ${price:,.2f} ({price_change:+.2f}%)"
+        else:
+            header = f"💎 <b>{symbol}</b>\n" + \
+                     f"💰 Price data unavailable"
         
         # PROGRESS BARS - RSI and Strategy Score
-        rsi = result.market_context.rsi if result.market_context else 0.0
         score = result.p_score
         
-        rsi_status = "Перепродан" if rsi < 30 else "Нейтрален" if rsi < 70 else "Перекуплен"
-        
-        progress_bars = f"📊 <b>Metrics</b>\n" + \
-                        f"RSI:    {draw_bar(rsi, 100, 10)} {rsi:.1f} ({rsi_status})\n" + \
-                        f"Score:  {draw_bar(score, 100, 10)} {score}/100"
+        # Only show RSI if market context is available and RSI is valid
+        if result.market_context and hasattr(result.market_context, 'rsi') and result.market_context.rsi > 0:
+            rsi = result.market_context.rsi
+            rsi_status = "Перепродан" if rsi < 30 else "Нейтрален" if rsi < 70 else "Перекуплен"
+            escaped_rsi_status = html.escape(rsi_status)
+            progress_bars = f"📊 <b>Metrics</b>\n" + \
+                            f"RSI:    {draw_bar(rsi, 100, 10)} {rsi:.1f} ({escaped_rsi_status})\n" + \
+                            f"Score:  {draw_bar(score, 100, 10)} {score}/100"
+        else:
+            progress_bars = f"📊 <b>Metrics</b>\n" + \
+                            f"Score:  {draw_bar(score, 100, 10)} {score}/100\n" + \
+                            f"RSI:    Data unavailable"
         
         # KEY LEVELS
         key_levels = _format_key_levels(supports or [], resistances or [])
@@ -198,6 +295,9 @@ def format_telegram_message(result: DecisionResult,
         
         # SIGNAL BLOCK
         signal_block = _format_signal_block(result)
+        
+        # MARKET LOGIC
+        market_logic = _format_market_logic(result.market_context)
         
         # FOOTER - Cleaned tags and watermark
         cleaned_tags = _clean_tags(tags or [])
@@ -216,6 +316,8 @@ def format_telegram_message(result: DecisionResult,
             liquidity_hunter,
             "",
             signal_block,
+            "",
+            market_logic,
             footer
         ]
         

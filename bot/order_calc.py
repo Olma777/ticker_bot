@@ -110,7 +110,7 @@ def build_order_plan(
     
     # 7. Mandatory Sanity Gate
     if rrr_tp2 < 1.10:  # Can be moved to Config later
-        return _blocked_plan(f"RRR {rrr_tp2:.2f} < Min 1.10")
+        return _blocked_plan(f"RRR {rrr_tp2:.2f} is below Min 1.10")
 
     # Success
     return OrderPlan(

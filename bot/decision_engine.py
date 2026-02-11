@@ -50,7 +50,7 @@ async def process_signal(payload: dict) -> DecisionResult:
         reason = f"Blocked by Kevlar: {kevlar_res.blocked_by}"
     elif p_score_res.score < Config.P_SCORE_THRESHOLD:
         decision = "WAIT"
-        reason = f"Low Score ({p_score_res.score} < {Config.P_SCORE_THRESHOLD})"
+        reason = f"Low Score ({p_score_res.score} is below {Config.P_SCORE_THRESHOLD})"
     else:
         decision = "TRADE"
         reason = "Valid Setup"

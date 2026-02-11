@@ -53,6 +53,7 @@ class DecisionResult:
     stop_loss: float            # CHANGED: was 'stop'
     tp_targets: List[float]
     reason: str
+    direction: Optional[str] = None  # "LONG" or "SHORT" for TRADE decisions
     # Context Snapshots for Notifier
     market_context: Optional[MarketContext] = None
     sentiment_context: Optional[SentimentContext] = None

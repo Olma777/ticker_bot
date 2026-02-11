@@ -107,73 +107,80 @@ def _detect_accumulation_distribution(
     # 1. Price below VWAP but holding support
     if price < vwap and supports and price < supports[0]['price'] * 1.02:
         accumulation_signals += 1
-        verdict_lines.append("📈 Цена ниже VWAP, но удерживается у поддержки — скрытый набор лонгов")
+        dist_vwap = ((vwap - price) / vwap) * 100
+        dist_support = ((supports[0]['price'] - price) / supports[0]['price']) * 100
+        verdict_lines.append(f"📈 Price is {dist_vwap:.1f}% below VWAP, holding {dist_support:.1f}% above support")
     
     # 2. RSI recovering from oversold (30→45)
     if 35 <= rsi <= 48:
         accumulation_signals += 1
-        verdict_lines.append("🔄 RSI выходит из перепроданности — спрос возвращается")
+        rsi_change = rsi - 30 if rsi > 30 else 0
+        verdict_lines.append(f"🔄 RSI {rsi:.1f} recovering from oversold (+{rsi_change:.1f} points)")
     
     # 3. Negative funding but price not falling
     if funding < -0.005 and supports and price > supports[0]['price'] * 0.99:
         accumulation_signals += 1
-        verdict_lines.append("💰 Отрицательный фандинг, но цена держится — шорты платят за удержание")
+        verdict_lines.append(f"💰 Funding {funding*100:.3f}% negative, price holding support")
     
     # 4. Strong support with high P-Score
     if p_score >= 50 and supports and supports[0]['score'] >= 2.0:
         accumulation_signals += 1
-        verdict_lines.append("🎯 Высокий P-Score у поддержки — алгоритмы видят потенциал")
+        verdict_lines.append(f"🎯 P-Score {p_score} with strong support (score: {supports[0]['score']:.1f})")
     
     # 5. Price coiling near support (low volatility)
     if supports and abs(price - supports[0]['price']) / price < 0.01:
         accumulation_signals += 1
-        verdict_lines.append("📊 Цена сжимается у поддержки — подготовка к движению")
+        dist_percent = abs(price - supports[0]['price']) / price * 100
+        verdict_lines.append(f"📊 Price coiling {dist_percent:.1f}% near support")
     
     # ===== DISTRIBUTION SIGNALS (MM SELLING) =====
     
     # 1. Price above VWAP but rejecting resistance
     if price > vwap and resistances and price > resistances[0]['price'] * 0.98:
         distribution_signals += 1
-        verdict_lines.append("📉 Цена выше VWAP, но упирается в сопротивление — возможная раздача")
+        dist_vwap = ((price - vwap) / vwap) * 100
+        dist_resistance = ((price - resistances[0]['price']) / resistances[0]['price']) * 100
+        verdict_lines.append(f"📉 Price is {dist_vwap:.1f}% above VWAP, rejecting {dist_resistance:.1f}% below resistance")
     
     # 2. RSI overbought without breakout
     if rsi > 68 and resistances and price < resistances[0]['price']:
         distribution_signals += 1
-        verdict_lines.append("⚠️ RSI > 70, но цена не пробивает уровень — перегрев, готовится откат")
+        verdict_lines.append(f"⚠️ RSI {rsi:.1f} overbought, price below resistance")
     
     # 3. Positive funding but price not advancing
     if funding > 0.01 and resistances and price < resistances[0]['price']:
         distribution_signals += 1
-        verdict_lines.append("💸 Положительный фандинг, но рост остановлен — лонги платят за воздух")
+        verdict_lines.append(f"💸 Funding {funding*100:.3f}% positive, price stalled at resistance")
     
     # 4. Weak P-Score at resistance
     if p_score < 40 and resistances and resistances[0]['score'] < 1.0:
         distribution_signals += 1
-        verdict_lines.append("📉 Слабеющий P-Score у сопротивления — интерес угасает")
+        verdict_lines.append(f"📉 P-Score {p_score} weak at resistance (score: {resistances[0]['score']:.1f})")
     
     # 5. Multiple touches without breakout
     if resistances and len([r for r in resistances if r['distance'] < price * 0.02]) > 2:
         distribution_signals += 1
-        verdict_lines.append("🛑 Многократные тесты сопротивления без пробоя — накопление шортов")
+        touch_count = len([r for r in resistances if r['distance'] < price * 0.02])
+        verdict_lines.append(f"🛑 {touch_count} resistance touches without breakout")
     
     # ===== FINAL VERDICT =====
     if accumulation_signals >= 3:
-        phase = "🔵 АККУМУЛЯЦИЯ"
-        summary = "MM набирает лонги у нижней границы. Ожидай выброс вверх после набора позиции."
+        phase = "🔵 ACCUMULATION"
+        summary = f"Accumulation signals: {accumulation_signals}, distribution: {distribution_signals}"
     elif distribution_signals >= 3:
-        phase = "🔴 РАСПРЕДЕЛЕНИЕ"
-        summary = "MM раздает позиции у верхней границы. Готовься к откату после раздачи."
+        phase = "🔴 DISTRIBUTION"
+        summary = f"Distribution signals: {distribution_signals}, accumulation: {accumulation_signals}"
     elif accumulation_signals >= 2:
-        phase = "🟡 ПРИЗНАКИ АККУМУЛЯЦИИ"
-        summary = "Виден интерес на покупки, но нужен катализатор для движения."
+        phase = "🟡 ACCUMULATION SIGNS"
+        summary = f"Accumulation signals: {accumulation_signals}, distribution: {distribution_signals}"
     elif distribution_signals >= 2:
-        phase = "🟡 ПРИЗНАКИ РАСПРЕДЕЛЕНИЯ"
-        summary = "Давление продаж растет, но уровень пока держится."
+        phase = "🟡 DISTRIBUTION SIGNS"
+        summary = f"Distribution signals: {distribution_signals}, accumulation: {accumulation_signals}"
     else:
-        phase = "⚪ НЕЙТРАЛЬНО"
-        summary = "MM удерживает диапазон, ждет накопления ликвидности."
+        phase = "⚪ NEUTRAL"
+        summary = f"Accumulation: {accumulation_signals}, distribution: {distribution_signals}"
     
-    verdict_lines.insert(0, f"• <b>Фаза:</b> {phase}")
+    verdict_lines.insert(0, f"• <b>Phase:</b> {phase}")
     verdict_lines.insert(1, f"  {summary}")
     
     return phase, verdict_lines
