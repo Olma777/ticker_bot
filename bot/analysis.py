@@ -276,8 +276,16 @@ Error: {str(e)[:200]}
 {ticker} | {datetime.now(timezone.utc).strftime("%H:%M UTC")}
 """
 
-print("✅ STEP 2: analysis.py force mode code prepared")
-mt(val: float) -> str:
+async def _generate_legacy_analysis(ticker: str, strat: dict, indicators: dict) -> str:
+    """Generate analysis using legacy OpenAI prompt (backup)"""
+    curr_price = indicators['price']
+    change = indicators['change']
+    p_score = strat['score']
+    
+    # Calculate calc_time just in case it's missing
+    calc_time = datetime.now(timezone.utc).strftime("%H:%M UTC")
+
+    def fmt(val: float) -> str:
         return f"${val:.4f}" if isinstance(val, (int, float)) and val > 0 else "N/A"
     
     entry_str = fmt(strat['entry'])
