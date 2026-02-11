@@ -5,6 +5,7 @@ P-Score Engine - СИНХРОНИЗИРОВАНО с Pine v3.7
 
 from bot.config import Config
 from bot.decision_models import MarketContext, SentimentContext, PScoreResult
+from bot.cache import TieredCache
 
 def calculate_score(
     event: dict,
@@ -69,3 +70,16 @@ def calculate_score(
     score = max(0, min(100, int(score)))
     
     return PScoreResult(score, breakdown)
+
+# Tiered Cache: P-Score
+_ps_cache = TieredCache()
+
+async def _original_fetch_logic(symbol: str):
+    raise NotImplementedError("Provide original P-Score fetch logic")
+
+async def get_pscore(symbol: str):
+    return await _ps_cache.get_or_set(
+        f"pscore:{symbol}",
+        lambda: _original_fetch_logic(symbol),
+        "pscore"
+    )

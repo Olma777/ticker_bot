@@ -14,6 +14,8 @@ from pydantic import BaseModel, field_validator
 from typing import Literal
 
 from bot.config import Config
+from bot.prices import PriceAggregator
+from datetime import datetime
 from bot.database import init_db, save_event
 from bot.decision_engine import process_signal
 from bot.notifier import send_card
@@ -127,3 +129,31 @@ async def webhook_listener(
     background_tasks.add_task(run_analysis_pipeline, data)
     
     return {"status": "received", "id": event_id}
+
+
+@app.get("/health")
+async def health_check():
+    checks = {}
+    errors = []
+    try:
+        aggregator = PriceAggregator()
+        import asyncio
+        async def _probe():
+            return await aggregator.get_price("BTCUSDT")
+        try:
+            price, provider = await asyncio.wait_for(_probe(), timeout=5)
+            checks["exchange"] = True
+        except Exception as e:
+            checks["exchange"] = False
+            errors.append(f"exchange: {str(e)[:50]}")
+    except Exception as e:
+        checks["exchange"] = False
+        errors.append(f"exchange: {str(e)[:50]}")
+    checks["config"] = bool(getattr(Config, "OPENROUTER_API_KEY", None))
+    status_code = 200 if all(checks.values()) else 503
+    return {
+        "status": "ok" if status_code == 200 else "degraded",
+        "checks": checks,
+        "errors": errors,
+        "timestamp": datetime.utcnow().isoformat()
+    }

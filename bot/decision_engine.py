@@ -17,8 +17,10 @@ from bot.sentiment import get_sentiment
 from bot.kevlar import check_safety
 from bot.pscore import calculate_score
 from bot.order_calc import build_order_plan
+from bot.models.market_context import MarketContext as DTOContext
+from bot.kevlar import check_safety_v2
 
-logger = logging.getLogger(__name__)
+from bot.logger import logger
 
 
 async def process_signal(payload: dict) -> DecisionResult:
@@ -96,7 +98,7 @@ async def process_signal(payload: dict) -> DecisionResult:
         stop = 0.0
         tp_targets = []
 
-    return DecisionResult(
+    result = DecisionResult(
         decision=decision,
         symbol=symbol,
         level=level_price,
@@ -109,7 +111,60 @@ async def process_signal(payload: dict) -> DecisionResult:
         market_context=market,
         sentiment_context=sentiment
     )
+    # LEGACY: logging.info(f"Decision made: {decision} for {symbol}")
+    logger.info("decision_made", symbol=symbol, price=market.price if hasattr(market, "price") else None, latency_ms=None, tokens_used=None)
+    return result
 
+
+async def process_signal_v2(payload: dict, ctx: DTOContext) -> DecisionResult:
+    symbol = payload.get('symbol') or ctx.symbol
+    level_price = float(payload.get('level', 0.0))
+    event_type = payload.get('event', '')
+    base_score = 50
+    regime_bonus = 10 if ctx.btc_regime == "bullish" else -10 if ctx.btc_regime == "bearish" else 0
+    p_score = max(0, min(100, base_score + regime_bonus))
+    kevlar_res = check_safety_v2(payload, ctx, p_score)
+    decision = "TRADE" if kevlar_res.passed and p_score >= Config.P_SCORE_THRESHOLD else "WAIT"
+    reason = "Valid Setup" if decision == "TRADE" else f"Blocked: {kevlar_res.blocked_by or 'Low Score'}"
+    order_plan = None
+    if decision == "TRADE":
+        side = "LONG" if "SUPPORT" in event_type else "SHORT"
+        zone_half = float(payload.get('zone_half', 0.0)) or (ctx.atr * Config.ZONE_WIDTH_MULT)
+        order_plan = build_order_plan(
+            side=side,
+            level=level_price,
+            zone_half=zone_half,
+            atr=ctx.atr,
+            capital=Config.DEFAULT_CAPITAL,
+            risk_pct=Config.DEFAULT_RISK_PCT,
+            lot_step=None
+        )
+        if order_plan.reason_blocked:
+            decision = "WAIT"
+            reason = f"Order Calc Blocked: {order_plan.reason_blocked}"
+    if order_plan and decision == "TRADE":
+        entry = order_plan.entry
+        stop = order_plan.stop_loss
+        tp_targets = [order_plan.tp1, order_plan.tp2, order_plan.tp3]
+    else:
+        entry = 0.0
+        stop = 0.0
+        tp_targets = []
+    result = DecisionResult(
+        decision=decision,
+        symbol=symbol,
+        level=level_price,
+        p_score=p_score,
+        kevlar=kevlar_res,
+        entry=entry,
+        stop_loss=stop,
+        tp_targets=tp_targets,
+        reason=reason,
+        market_context=None,
+        sentiment_context=None
+    )
+    logger.info("decision_made", symbol=symbol, price=None, latency_ms=None, tokens_used=None)
+    return result
 
 def _create_error_result(msg: str) -> DecisionResult:
     return DecisionResult(

@@ -15,6 +15,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_ATTEMPTS
 from bot.prices import get_crypto_price
 from bot.indicators import get_technical_indicators
+from bot.cache import TieredCache
+from bot.logger import logger
 
 logger = logging.getLogger(__name__)
 
@@ -167,12 +169,17 @@ async def get_daily_briefing(user_input: Optional[str] = None) -> str:
     """
     
     try:
+        start_ts = datetime.now(timezone.utc)
         report = await _call_openai(prompt, temperature=0.0)
+        latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
+        # LEGACY: logging.info("Daily briefing generated")
+        logger.info("llm_response", symbol="DAILY", price=None, latency_ms=int(latency), tokens_used=None)
         daily_cache.clear()
         daily_cache[cache_key] = report
         return report
     except Exception as e:
-        logger.error(f"Daily briefing error: {e}")
+        # LEGACY: logger.error(f"Daily briefing error: {e}")
+        logger.error("llm_response_error", symbol="DAILY", exc_info=True)
         return f"⚠️ Ошибка Daily: {e}"
 
 
@@ -224,9 +231,13 @@ async def analyze_token_fundamentals(ticker: str) -> str:
     """
 
     try:
-        return await _call_openai(prompt, temperature=0.1)
+        start_ts = datetime.now(timezone.utc)
+        resp = await _call_openai(prompt, temperature=0.1)
+        latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
+        logger.info("llm_response", symbol=ticker, price=None, latency_ms=int(latency), tokens_used=None)
+        return resp
     except Exception as e:
-        logger.error(f"Audit error: {e}")
+        logger.error("llm_response_error", symbol=ticker, exc_info=True)
         return f"⚠️ Ошибка аудита: {e}"
 
 
@@ -257,8 +268,11 @@ Please contact support.
 """
     
     try:
-        logger.info(f"🎯 AI Analyst processing: {ticker}")
+        # LEGACY: logger.info(f\"🎯 AI Analyst processing: {ticker}\")
+        start_ts = datetime.now(timezone.utc)
         analysis = await get_ai_sniper_analysis(ticker)
+        latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
+        logger.info("llm_response", symbol=ticker, price=None, latency_ms=int(latency), tokens_used=None)
         
         # Verify we got REAL TP values
         if "TP1:" in analysis and "N/A" not in analysis:
@@ -268,7 +282,7 @@ Please contact support.
             return analysis  # Still return it for debugging
             
     except Exception as e:
-        logger.error(f"❌ AI Analyst critical error: {e}")
+        logger.error("llm_response_error", symbol=ticker, exc_info=True)
         return f"""❌ <b>AI ANALYST CRASHED</b>
         
 Error: {str(e)[:200]}
@@ -475,3 +489,17 @@ async def get_market_scan() -> str:
 async def get_crypto_analysis(ticker: str, name: str, language: str = "ru") -> str:
     """Legacy function - redirects to analyze_token_fundamentals."""
     return await analyze_token_fundamentals(ticker)
+
+# Tiered Cache: Fundamental
+_fund_cache = TieredCache()
+
+async def _original_fetch_logic(symbol: str) -> str:
+    sym = symbol.upper().replace("USDT", "").replace("USD", "")
+    return await analyze_token_fundamentals(sym)
+
+async def get_fundamental(symbol: str) -> str:
+    return await _fund_cache.get_or_set(
+        f"fundamental:{symbol}",
+        lambda: _original_fetch_logic(symbol),
+        "fundamental"
+    )

@@ -20,6 +20,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bot.db import init_db, get_user_setting, set_user_setting, delete_user_setting, get_all_users_for_hour
 from bot.prices import get_crypto_price, get_market_summary
 from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan
+from bot.validators import SymbolValidator, InvalidSymbolError
+from bot.prices import PriceUnavailableError
+from bot.logger import configure_logging, logger
+from bot.utils import batch_process
 
 # --- CONFIGURATION ---
 load_dotenv()
@@ -187,13 +191,13 @@ async def audit_handler(message: Message) -> None:
     if len(args) < 2:
         await message.answer("⚠️ Введите тикер.\nПример: <code>/audit SOL</code>", parse_mode=ParseMode.HTML)
         return
-    
-    ticker = args[1].upper().strip()
-    
-    is_valid, error_msg = validate_ticker(ticker)
-    if not is_valid:
-        await message.answer(error_msg, parse_mode=ParseMode.HTML)
+    symbol_raw = args[1]
+    try:
+        symbol = SymbolValidator.validate(symbol_raw)
+    except InvalidSymbolError as e:
+        await message.answer(f"❌ Invalid symbol: {e}")
         return
+    ticker = symbol.replace("USDT", "").replace("USDC", "").replace("BUSD", "").replace("FDUSD", "")
     
     loading_msg = await message.answer(f"🛡 <b>Изучаю проект {ticker}...</b>", parse_mode=ParseMode.HTML)
     
@@ -214,6 +218,8 @@ async def audit_handler(message: Message) -> None:
             await loading_msg.edit_text(error_text, parse_mode=ParseMode.HTML)
         except Exception:
             await message.answer(error_text, parse_mode=ParseMode.HTML)
+    except PriceUnavailableError as e:
+        await message.answer(f"⚠️ Price unavailable: {e}")
 
 
 @dp.message(Command("sniper"))
@@ -226,10 +232,16 @@ async def cmd_sniper(message: Message) -> None:
         await message.answer("⚠️ Используйте: /sniper [TICKER]\nПример: /sniper LTC")
         return
     
-    loading_msg = await message.answer(f"🔭 Снайпер-модуль сканирует {args.upper()}...")
+    try:
+        symbol = SymbolValidator.validate(args)
+    except InvalidSymbolError as e:
+        await message.answer(f"❌ Invalid symbol: {e}")
+        return
+    ticker = symbol.replace("USDT", "").replace("USDC", "").replace("BUSD", "").replace("FDUSD", "")
+    loading_msg = await message.answer(f"🔭 Снайпер-модуль сканирует {ticker}...")
     
     try:
-        report = await get_sniper_analysis(args.upper(), "ru")
+        report = await get_sniper_analysis(ticker, "ru")
         await loading_msg.delete()
         
         try:
@@ -242,16 +254,29 @@ async def cmd_sniper(message: Message) -> None:
     except Exception as e:
         logger.error(f"Error in cmd_sniper: {e}", exc_info=True)
         await message.answer(f"⚠️ Ошибка: {e}")
+    except PriceUnavailableError as e:
+        await message.answer(f"⚠️ Price unavailable: {e}")
 
 
 @dp.message(Command("daily"))
 async def daily_manual_handler(message: Message) -> None:
     """Manual daily briefing request."""
-    loading = await message.answer("☕️ Сканирую сектора рынка...")
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
+    loading = await message.answer("☕️ Параллельно собираю дайджест по рынку (лимит: 3)...")
     try:
-        report = await get_daily_briefing()
+        results = await batch_process(
+            symbols,
+            lambda s: get_sniper_analysis(s.replace("USDT",""), "ru"),
+            concurrency=3
+        )
         await loading.delete()
-        await message.answer(report, parse_mode="HTML")
+        response = []
+        for symbol, result in zip(symbols, results):
+            if isinstance(result, Exception):
+                response.append(f"{symbol}: ❌ {str(result)[:50]}")
+            else:
+                response.append(f"{symbol}: ✅ {result[:100]}...")
+        await message.answer("\n".join(response))
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {e}")
 
@@ -259,6 +284,14 @@ async def daily_manual_handler(message: Message) -> None:
 @dp.message(Command("scan"))
 async def cmd_scan(message: Message) -> None:
     """Market scanner - hidden accumulation search."""
+    args_list = message.text.split() if message.text else []
+    if len(args_list) > 1:
+        symbol_raw = args_list[1]
+        try:
+            SymbolValidator.validate(symbol_raw)
+        except InvalidSymbolError as e:
+            await message.answer(f"❌ Invalid symbol: {e}")
+            return
     loading = await message.answer("🔭 Сканирую рынок на предмет скрытой аккумуляции...")
     try:
         report = await get_market_scan()
@@ -266,6 +299,8 @@ async def cmd_scan(message: Message) -> None:
         await message.answer(report, parse_mode="HTML")
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {e}")
+    except PriceUnavailableError as e:
+        await message.answer(f"⚠️ Price unavailable: {e}")
 
 
 @dp.message(Command("test_post"))
@@ -280,6 +315,8 @@ async def cmd_test_post(message: Message) -> None:
 
 async def main() -> None:
     """Main entry point."""
+    configure_logging(json_logs=True)
+    logger.info("bot_started", version="v3.0")
     # Initialize database
     init_db()
     

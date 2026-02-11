@@ -11,6 +11,8 @@ import ccxt.async_support as ccxt
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from bot.config import COIN_NAMES, EXCHANGE_OPTIONS, RETRY_ATTEMPTS, RETRY_WAIT_SECONDS
+from bot.cache import TieredCache
+from bot.logger import logger
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +113,102 @@ async def get_crypto_price(ticker: str) -> tuple[Optional[dict], Optional[bool]]
 
     return None, True
 
+
+# --- Tiered Cache Integration ---
+cache = TieredCache()
+
+async def _original_fetch_logic(symbol: str) -> float:
+    sym = symbol.upper().replace("USDT", "").replace("USD", "")
+    headers = {"User-Agent": "Mozilla/5.0"}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        try:
+            res = await _fetch_binance_futures_price(sym, session)
+            if res and res.get("price"):
+                price_val = float(res["price"])
+                # LEGACY: logging.info(f"Price for {symbol}: {price_val}")
+                logger.info("price_fetched", symbol=symbol, price=price_val, provider="binance_futures", latency_ms=None, tokens_used=None)
+                return price_val
+        except Exception as e:
+            # LEGACY: logger.debug(f"Binance Futures fetch failed: {e}")
+            logger.error("binance_fetch_failed", symbol=symbol, exc_info=True)
+    try:
+        res = await _fetch_ccxt_price(sym)
+        if res and res.get("price"):
+            price_val = float(res["price"])
+            logger.info("price_fetched", symbol=symbol, price=price_val, provider="ccxt", latency_ms=None, tokens_used=None)
+            return price_val
+    except Exception as e:
+        # LEGACY: logger.error(f"CCXT fallback failed for {symbol}: {e}")
+        logger.error("ccxt_fetch_failed", symbol=symbol, exc_info=True)
+    raise Exception(f"Price fetch failed for {symbol}")
+
+async def get_price(symbol: str) -> float:
+    return await cache.get_or_set(
+        f"price:{symbol}",
+        lambda: _original_fetch_logic(symbol),
+        "price"
+    )
+
+
+# --- Price Aggregator with Fallback ---
+class PriceUnavailableError(Exception):
+    pass
+
+class PriceAggregator:
+    PROVIDERS = ["binance_futures", "bybit", "okx", "mexc"]
+    
+    async def get_price(self, symbol: str) -> tuple[float, str]:
+        errors: list[str] = []
+        for provider in self.PROVIDERS:
+            try:
+                method = getattr(self, f"_fetch_{provider}")
+                price = await method(symbol)
+                # LEGACY: logging.info(f"Price for {symbol}: {price} via {provider}")
+                logger.info("price_fetched", symbol=symbol, price=price, provider=provider, latency_ms=None, tokens_used=None)
+                return price, provider
+            except Exception as e:
+                # LEGACY: logger.debug(f"Provider {provider} failed: {e}")
+                logger.error("price_provider_failed", symbol=symbol, exc_info=True)
+                errors.append(f"{provider}:{str(e)[:40]}")
+                continue
+        raise PriceUnavailableError(f"All failed: {' | '.join(errors[:3])}")
+    
+    async def _fetch_binance_futures(self, symbol: str) -> float:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with aiohttp.ClientSession(headers=headers) as session:
+            url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol.upper().replace('USDT','').replace('USD','')}USDT"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status != 200:
+                    raise Exception(f"HTTP {response.status}")
+                data = await response.json()
+                return float(data["price"])
+    
+    async def _fetch_bybit(self, symbol: str) -> float:
+        exch = ccxt.bybit(EXCHANGE_OPTIONS["bybit"])
+        try:
+            pair = f"{symbol.upper().replace('USDT','').replace('USD','')}/USDT"
+            data = await exch.fetch_ticker(pair)
+            return float(data["last"])
+        finally:
+            await exch.close()
+    
+    async def _fetch_okx(self, symbol: str) -> float:
+        exch = ccxt.okx(EXCHANGE_OPTIONS["okx"])
+        try:
+            pair = f"{symbol.upper().replace('USDT','').replace('USD','')}/USDT"
+            data = await exch.fetch_ticker(pair)
+            return float(data["last"])
+        finally:
+            await exch.close()
+    
+    async def _fetch_mexc(self, symbol: str) -> float:
+        exch = ccxt.mexc(EXCHANGE_OPTIONS["mexc"])
+        try:
+            pair = f"{symbol.upper().replace('USDT','').replace('USD','')}/USDT"
+            data = await exch.fetch_ticker(pair)
+            return float(data["last"])
+        finally:
+            await exch.close()
 
 async def get_market_summary() -> dict[str, str]:
     """

@@ -13,12 +13,16 @@ from typing import Optional
 
 from bot.config import Config, EXCHANGE_OPTIONS, TRADING
 from bot.decision_models import MarketContext
+from bot.models.market_context import MarketContext as DTOContext
 from bot.indicators import (
     calculate_atr, 
     calculate_rsi, 
     calculate_vwap_24h,
-    calculate_global_regime
+    calculate_global_regime,
+    fetch_funding_rate
 )
+from bot.prices import get_price
+from bot.prices import PriceAggregator, PriceUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +105,13 @@ async def get_market_context(symbol: str) -> MarketContext:
             if atr == 0 or vwap == 0:
                 quality = "DEGRADED"
 
+            try:
+                aggregator = PriceAggregator()
+                fetched_price, _prov = await aggregator.get_price(symbol)
+                current_price = float(fetched_price)
+            except PriceUnavailableError:
+                pass
+
             return MarketContext(
                 price=current_price,
                 atr=atr,
@@ -122,3 +133,30 @@ async def get_market_context(symbol: str) -> MarketContext:
                 candle_open=0.0, candle_high=0.0, candle_low=0.0, candle_close=0.0,
                 data_quality="DEGRADED"
             )
+
+
+async def fetch_market_context(symbol: str) -> DTOContext:
+    s = symbol.upper()
+    if "/" not in s:
+        s = f"{s}/USDT"
+    price = await get_price(s)
+    exchange_id = "binance"
+    options = EXCHANGE_OPTIONS.get(exchange_id, {})
+    exchange_class = getattr(ccxt, exchange_id)
+    async with exchange_class(options) as exchange:
+        btc_df = await fetch_ohlcv(exchange, "BTC/USDT", TRADING.timeframe, 300)
+        df = await fetch_ohlcv(exchange, s, TRADING.timeframe, 150)
+        regime_label, _ = calculate_global_regime(btc_df) if btc_df is not None else ("NEUTRAL", None)
+        atr_val = float(calculate_atr(df).iloc[-1]) if df is not None else 0.0
+        vwap_val = calculate_vwap_24h(df) if df is not None else 0.0
+        funding = await fetch_funding_rate(exchange, s)
+    regime_map = {"EXPANSION": "bullish", "COMPRESSION": "bearish", "NEUTRAL": "neutral"}
+    btc_regime = regime_map.get(regime_label, "neutral")
+    return DTOContext(
+        symbol=s,
+        price=float(price),
+        btc_regime=btc_regime, 
+        atr=atr_val,
+        vwap=vwap_val if vwap_val != 0 else None,
+        funding_rate=funding
+    )

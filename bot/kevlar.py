@@ -5,6 +5,7 @@ Kevlar Core - HOTFIX 2026.02.11
  
 from bot.config import Config 
 from bot.decision_models import MarketContext, SentimentContext, KevlarResult 
+from bot.models.market_context import MarketContext as DTOContext
  
 def check_safety( 
     event: dict, 
@@ -78,4 +79,21 @@ def check_safety(
             ) 
  
     # Все фильтры пройдены 
+    return KevlarResult(passed=True, blocked_by=None)
+
+
+def check_safety_v2(
+    event: dict,
+    ctx: DTOContext,
+    p_score: int
+) -> KevlarResult:
+    event_type = event.get("event", "")
+    level_price = float(event.get("level", 0.0))
+    current_price = ctx.price
+    atr = ctx.atr
+    if atr == 0 or current_price == 0:
+        return KevlarResult(passed=False, blocked_by="K0_INVALID_MARKET_DATA")
+    dist_pct = abs(current_price - level_price) / current_price * 100
+    if dist_pct > Config.MAX_DIST_PCT:
+        return KevlarResult(passed=False, blocked_by=f"K1_LEVEL_TOO_FAR ({dist_pct:.1f}%)")
     return KevlarResult(passed=True, blocked_by=None)
