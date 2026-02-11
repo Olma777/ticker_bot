@@ -16,6 +16,15 @@ from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_A
 from bot.prices import get_crypto_price
 from bot.indicators import get_technical_indicators
 
+# ===== AI ANALYST INTEGRATION =====
+try:
+    from bot.ai_analyst import get_ai_sniper_analysis
+    AI_ANALYST_AVAILABLE = True
+    logger.info("✓ AI Analyst module loaded successfully")
+except ImportError as e:
+    AI_ANALYST_AVAILABLE = False
+    logger.warning(f"⚠ AI Analyst not available: {e}. Using legacy analysis.")
+
 logger = logging.getLogger(__name__)
 
 # --- RATE LIMITER ---
@@ -224,7 +233,29 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 # --- 3. SNIPER ---
 
 async def get_sniper_analysis(ticker: str, language: str = "ru") -> str:
-    """Generate sniper analysis for a ticker."""
+    """
+    Generate professional analysis using AI Analyst.
+    Falls back to legacy analysis if AI fails.
+    """
+    # PRIORITY 1: Use AI Analyst (your professional template)
+    if AI_ANALYST_AVAILABLE:
+        try:
+            logger.info(f"🎯 Using AI Analyst for {ticker}")
+            analysis = await get_ai_sniper_analysis(ticker)
+            
+            # Basic validation of AI output
+            if analysis and len(analysis) > 50 and "⚠️" not in analysis[:100]:
+                return analysis
+            else:
+                logger.warning(f"AI analysis failed quality check for {ticker}")
+                # Fall through to legacy
+        except Exception as e:
+            logger.error(f"❌ AI Analyst failed for {ticker}: {e}")
+            # Fall through to legacy
+    
+    # PRIORITY 2: Legacy analysis (backup - KEEP EXISTING CODE)
+    logger.info(f"🔄 Using legacy analysis for {ticker}")
+
     price_data, error = await get_crypto_price(ticker)
     if not price_data:
         return f"⚠️ Не удалось найти {ticker}."

@@ -50,7 +50,7 @@ class DecisionResult:
     p_score: int
     kevlar: KevlarResult
     entry: float
-    stop: float
+    stop_loss: float            # CHANGED: was 'stop'
     tp_targets: List[float]
     reason: str
     # Context Snapshots for Notifier

@@ -48,7 +48,7 @@ class TvPayload(BaseModel):
     level: float
     atr: float
     zone_half: float
-    score: float
+    score: float = Field(alias="sc")  # FIXED: Pine Script sends 'sc', we map to 'score'
     regime: str
     # Optional fields or fields used in logic
     touches: int = 0

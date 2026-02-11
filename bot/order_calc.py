@@ -2,13 +2,13 @@
 Deterministic Order Calculator (P1 - Required).
 A single source of truth for all order math: Entry, SL, TP, Size, RRR.
 Pure logic, no I/O.
+UPDATED: Uses Config.SL_ATR_MULT (1.5) instead of hardcoded 0.25.
 """
 
 from dataclasses import dataclass
 from typing import Literal, Optional, List
 import math
-
-from bot.config import Config, TRADING
+from bot.config import Config
 
 # Type Definitions
 SideType = Literal["LONG", "SHORT"]
@@ -17,7 +17,7 @@ SideType = Literal["LONG", "SHORT"]
 class OrderPlan:
     """The result of a deterministic order calculation."""
     entry: float
-    sl: float
+    stop_loss: float        # CHANGED: was 'sl'
     tp1: float
     tp2: float
     tp3: float
@@ -28,7 +28,7 @@ class OrderPlan:
     rrr_tp2: float
     
     reason_blocked: Optional[str] = None  # If set, trade is INVALID
-    
+
 
 def build_order_plan(
     side: SideType,
@@ -59,24 +59,25 @@ def build_order_plan(
     entry_price = level
     
     # 2. Stop Loss (Zone Boundary ± Buffer)
-    sl_buffer = TRADING.sl_buffer_atr * atr
+    # FIXED: Use Config.SL_ATR_MULT (1.5) instead of hardcoded 0.25
+    sl_buffer = Config.SL_ATR_MULT * atr
     
     if side == "LONG":
         zone_bot = level - zone_half
         sl_price = zone_bot - sl_buffer
         
         # 3. Take Profits (ATR based from Entry)
-        tp1 = entry_price + (TRADING.tp1_atr * atr)
-        tp2 = entry_price + (TRADING.tp2_atr * atr)
-        tp3 = entry_price + (TRADING.tp3_atr * atr)
+        tp1 = entry_price + (0.75 * atr)   # Can be replaced with Config.TP_ATR_MULT later
+        tp2 = entry_price + (1.25 * atr)
+        tp3 = entry_price + (2.00 * atr)
         
     else: # SHORT
         zone_top = level + zone_half
         sl_price = zone_top + sl_buffer
         
-        tp1 = entry_price - (TRADING.tp1_atr * atr)
-        tp2 = entry_price - (TRADING.tp2_atr * atr)
-        tp3 = entry_price - (TRADING.tp3_atr * atr)
+        tp1 = entry_price - (0.75 * atr)
+        tp2 = entry_price - (1.25 * atr)
+        tp3 = entry_price - (2.00 * atr)
 
     # 4. Stop Distance & Validation
     stop_dist = abs(entry_price - sl_price)
@@ -108,13 +109,13 @@ def build_order_plan(
     rrr_tp2 = reward_dist / stop_dist
     
     # 7. Mandatory Sanity Gate
-    if rrr_tp2 < TRADING.min_rrr:
-        return _blocked_plan(f"RRR {rrr_tp2:.2f} < Min {TRADING.min_rrr}")
+    if rrr_tp2 < 1.10:  # Can be moved to Config later
+        return _blocked_plan(f"RRR {rrr_tp2:.2f} < Min 1.10")
 
     # Success
     return OrderPlan(
         entry=entry_price,
-        sl=sl_price,
+        stop_loss=sl_price,      # CHANGED: was 'sl'
         tp1=tp1,
         tp2=tp2,
         tp3=tp3,
@@ -129,7 +130,7 @@ def build_order_plan(
 def _blocked_plan(reason: str) -> OrderPlan:
     """Helper to return a blocked plan safely."""
     return OrderPlan(
-        entry=0.0, sl=0.0, tp1=0.0, tp2=0.0, tp3=0.0,
+        entry=0.0, stop_loss=0.0, tp1=0.0, tp2=0.0, tp3=0.0,
         stop_dist=0.0, risk_amount=0.0, size_units=0.0, rrr_tp2=0.0,
         reason_blocked=reason
     )

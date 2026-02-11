@@ -44,7 +44,7 @@ def format_decision_card(result: DecisionResult) -> str:
             exec_block = f"""
 🔫 <b>Execution:</b>
 • Entry: {result.entry:.4f}
-• Stop: {result.stop:.4f}
+• Stop Loss: {result.stop_loss:.4f}
 • TP1: {tp1:.4f} | TP3: {tp3:.4f}
 """
 
