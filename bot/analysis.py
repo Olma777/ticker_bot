@@ -16,6 +16,8 @@ from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_A
 from bot.prices import get_crypto_price
 from bot.indicators import get_technical_indicators
 
+logger = logging.getLogger(__name__)
+
 # ===== AI ANALYST INTEGRATION =====
 try:
     from bot.ai_analyst import get_ai_sniper_analysis
@@ -24,8 +26,6 @@ try:
 except ImportError as e:
     AI_ANALYST_AVAILABLE = False
     logger.warning(f"⚠ AI Analyst not available: {e}. Using legacy analysis.")
-
-logger = logging.getLogger(__name__)
 
 # --- RATE LIMITER ---
 rate_limiter = AsyncLimiter(RATE_LIMITS.openrouter_requests, RATE_LIMITS.openrouter_period)
