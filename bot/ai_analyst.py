@@ -561,7 +561,8 @@ async def get_ai_sniper_analysis(ticker: str) -> str:
 • <b>Strategy Score:</b> <b>{p_score}%</b> {'✅' if p_score >= 35 else '❌'}
 
 💰 <b>3. АНАЛИЗ НАСТРОЕНИЯ И ПОЗИЦИЙ КРУПНЫХ ИГРОКОВ:</b>
-{chr(10).join(mm_block)}
+{f"<b>{mm_block[0]}</b>" if mm_block else ""}
+{chr(10).join(mm_block[1:]) if len(mm_block) > 1 else ""}
 
 🎯 <b>4. ФЬЮЧЕРСНЫЙ СИГНАЛ (НА ОСНОВЕ ИНДИКАТОРА):</b>{signal_text}
 📋 <b>ЛОГИКА РЕШЕНИЯ:</b>
