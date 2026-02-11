@@ -69,7 +69,7 @@ Reason: {reason}
         return "Error formatting card."
 
 
-async def send_card(result: DecisionResult):
+async def send_card(result: Union[DecisionResult, str]):
     """Send card to Telegram (wrapper)."""
     from bot.config import Config
     import requests
@@ -77,7 +77,11 @@ async def send_card(result: DecisionResult):
     if not Config.TELEGRAM_TOKEN or not Config.TELEGRAM_CHAT_ID:
         return
         
-    text = format_decision_card(result)
+    # Handle direct text (AI Analyst) or DecisionResult
+    if isinstance(result, str):
+        text = result
+    else:
+        text = format_decision_card(result)
     
     url = f"https://api.telegram.org/bot{Config.TELEGRAM_TOKEN}/sendMessage"
     payload = {
