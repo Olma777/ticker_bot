@@ -9,6 +9,30 @@ import re
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
+
+def draw_bar(value, total=100, length=10):
+    """
+    Draw a progress bar using '▓' and '░' characters.
+    
+    Args:
+        value: Current value
+        total: Maximum value (default 100)
+        length: Length of the bar in characters (default 10)
+    
+    Returns:
+        String representing the progress bar
+    """
+    # Calculate the percentage
+    percentage = min(100, max(0, (value / total) * 100)) if total > 0 else 0
+    
+    # Calculate how many filled characters we need
+    filled_length = int(length * percentage / 100)
+    
+    # Create the bar
+    bar = '▓' * filled_length + '░' * (length - filled_length)
+    
+    return bar
+
 logger = logging.getLogger(__name__)
 
 
@@ -564,40 +588,46 @@ async def get_ai_sniper_analysis(ticker: str) -> str:
         
         mm_block.append(f"• <b>Open Interest Trend:</b> {oi_trend}")
         
-        # ============ STEP 10: FINAL OUTPUT - YOUR COMPLETE TEMPLATE ============
+        # ============ STEP 10: FINAL OUTPUT - NEW CARD UI DESIGN ============
+        # Format bars
+        rsi_bar = draw_bar(rsi, 100, 10)
+        pscore_bar = draw_bar(p_score, 100, 10)
+        
+        # Direction emojis
+        direction_emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
+        change_emoji = "📈" if "+" in change else "📉"
+        
+        # Kevlar status
+        kevlar_status = "ON" if p_score >= 70 and abs(rsi - 50) >= 20 else "OFF"
+        
+        decision_reason_text = ' • '.join(decision_reason) if decision_reason else 'Нет активного сигнала'
+        mm_analysis_text = chr(10).join(mm_block[:5]) if mm_block else 'Нет данных'
+        
+        # Format order values for display
+        entry_value = f"${order.entry:,.2f}" if order else "N/A"
+        stop_value = f"${order.stop_loss:,.2f}" if order else "N/A"
+        
+        # Get RSI status in Russian
+        rsi_status = "Перепродан" if rsi < 30 else "Нейтрален" if rsi < 70 else "Перекуплен"
+        
         return f"""
-📊 <b>{ticker.upper()} | PROFESSIONAL SNIPER ANALYSIS</b>
-🕒 <b>Время анализа:</b> {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
-💰 <b>Текущая цена:</b> <code>${price:,.2f}</code> ({change})
+💎 <b>{ticker.upper()}</b>
+💰 ${price:,.2f} ({change_emoji} {change})
+────────────────
+📊 <b>Metrics</b>
+RSI:    {rsi_bar} {rsi:.1f} ({rsi_status})
+Score:  {pscore_bar} {p_score}/100
 
-🎯 <b>1. КЛЮЧЕВЫЕ УРОВНИ (M30) — ИНДИКАТОР:</b>
-• <b>Поддержка:</b> {support_display}
-• <b>Сопротивление:</b> {resistance_display}
+<b>Сигнал:</b> {direction} {direction_emoji}
+<b>Вход:</b> {entry_value}
+<b>Стоп:</b> {stop_value}
+<b>Kevlar:</b> {kevlar_status}
 
-📈 <b>2. ТЕКУЩАЯ ФАЗА РЫНКА И СТРУКТУРА ТРЕНДА:</b>
-• <b>Фаза:</b> {market_phase}
-• <b>RSI (14):</b> {rsi:.1f} — {'Перепроданность' if rsi < 30 else 'Перекупленность' if rsi > 70 else 'Нейтрально'}
-• <b>VWAP (24h):</b> ${vwap:,.2f} — Цена {'выше' if price > vwap else 'ниже'} VWAP
-• <b>Режим BTC:</b> {regime}
-• <b>Strategy Score:</b> <b>{p_score}%</b> {'✅' if p_score >= 35 else '❌'}
+<b>ЛОГИКА РЕШЕНИЯ:</b>
+{decision_reason_text}
 
-💰 <b>3. АНАЛИЗ НАСТРОЕНИЯ И ПОЗИЦИЙ КРУПНЫХ ИГРОКОВ:</b>
-{f"<b>{mm_block[0]}</b>" if mm_block else ""}
-{chr(10).join(mm_block[1:]) if len(mm_block) > 1 else ""}
-
-🎯 <b>4. ФЬЮЧЕРСНЫЙ СИГНАЛ (НА ОСНОВЕ ИНДИКАТОРА):</b>{signal_text}
-📋 <b>ЛОГИКА РЕШЕНИЯ:</b>
-{' • '.join(decision_reason) if decision_reason else 'Нет активного сигнала'}
-
-⚠️ <b>УСЛОВИЯ ВХОДА И РИСКИ:</b>
-• Вход строго лимитным ордером по указанному уровню
-• Риск на сделку: 1-2% от депозита
-• Stop Loss: {stop_display}
-• Take Profit 1-2-3: {tp1_display} | {tp2_display} | {tp3_display}
-• Минимальный RRR: 1.10 {'✅' if rrr_display != 'N/A' and float(rrr_display) >= 1.10 else '❌'}
-• Отмена сценария: пробой уровня стоп-лосс
-
-#️⃣ <b>ТЕГИ:</b> #{ticker.upper()} #{market_phase.replace(' ', '_')} #{'LONG' if direction == 'LONG' else 'SHORT' if direction == 'SHORT' else 'WAIT'} #AI_Sniper_v3.2
+<b>MM АНАЛИЗ:</b>
+{mm_analysis_text}
 """
         
     except Exception as e:
