@@ -66,18 +66,25 @@ def build_order_plan(
         zone_bot = level - zone_half
         sl_price = zone_bot - sl_buffer
         
-        # 3. Take Profits (ATR based from Entry)
-        tp1 = entry_price + (0.75 * atr)   # Can be replaced with Config.TP_ATR_MULT later
-        tp2 = entry_price + (1.25 * atr)
-        tp3 = entry_price + (2.00 * atr)
+        # 3. Take Profits (Risk Based R-Multiples)
+        # RRR Validation Fix: TP must be relative to risk to ensure viable RRR.
+        # We target: TP1=1R, TP2=2R, TP3=3R
+        risk_dist = abs(entry_price - sl_price)
+        
+        tp1 = entry_price + (1.0 * risk_dist)
+        tp2 = entry_price + (2.0 * risk_dist)
+        tp3 = entry_price + (3.0 * risk_dist)
         
     else: # SHORT
         zone_top = level + zone_half
         sl_price = zone_top + sl_buffer
         
-        tp1 = entry_price - (0.75 * atr)
-        tp2 = entry_price - (1.25 * atr)
-        tp3 = entry_price - (2.00 * atr)
+        # 3. Take Profits (Risk Based R-Multiples)
+        risk_dist = abs(entry_price - sl_price)
+        
+        tp1 = entry_price - (1.0 * risk_dist)
+        tp2 = entry_price - (2.0 * risk_dist)
+        tp3 = entry_price - (3.0 * risk_dist)
 
     # 4. Stop Distance & Validation
     stop_dist = abs(entry_price - sl_price)
