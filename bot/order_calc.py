@@ -35,8 +35,8 @@ def build_order_plan(
     level: float,
     zone_half: float,
     atr: float,
-    capital: float,
-    risk_pct: float,
+    capital: float = Config.DEFAULT_CAPITAL,
+    risk_pct: float = Config.DEFAULT_RISK_PCT,
     lot_step: Optional[float] = None
 ) -> OrderPlan:
     """
@@ -47,8 +47,8 @@ def build_order_plan(
         level: Central level price from TV payload
         zone_half: Half-width of the zone (from TV or calc)
         atr: Current market ATR(14)
-        capital: Account equity to base risk on
-        risk_pct: Percentage risk (1.0 = 1%)
+        capital: Account equity to base risk on (default from Config)
+        risk_pct: Percentage risk (1.0 = 1%) (default from Config)
         lot_step: Optional step size for rounding (e.g. 0.001 for BTC)
         
     Returns:

@@ -1,9 +1,9 @@
 """
-P-Score Engine (Phase 2).
-Calculates deterministic probability score.
-Formula v2.7 (Spec v2.0).
+P-Score Engine - СИНХРОНИЗИРОВАНО с Pine v3.7
+Быстрая оценка вероятности для Decision Engine
 """
 
+from bot.config import Config
 from bot.decision_models import MarketContext, SentimentContext, PScoreResult
 
 def calculate_score(
@@ -12,70 +12,60 @@ def calculate_score(
     sentiment: SentimentContext
 ) -> PScoreResult:
     """
-    Calculate P-Score (0-100).
+    Расчет P-Score (0-100)
+    УПРОЩЕННАЯ версия для мгновенных решений
     """
     score = 50
-    breakdown = ["Base: 50"]
+    breakdown = ["База: 50"]
     
-    # 1. Level Strength
-    # Strong (Sc >= 1): +15
-    # Weak (Sc < 0): -20
-    # Ghost (Sc < -10): Automatic Wait (Handled via low score)
+    # 1. Сила уровня (из Pine Script)
     sc = float(event.get('score', 0))
     
+    # GHOST LEVEL - мгновенная блокировка
     if sc < -10:
-        score = 0
-        breakdown.append(f"Ghost Level (Sc {sc}): FORCE WAIT")
-        return PScoreResult(0, breakdown) # Kill immediately
-        
+        return PScoreResult(0, ["GHOST LEVEL: принудительный WAIT"])
+    
+    # STRONG LEVEL (SC >= 1.0) = +15
     if sc >= 1.0:
         score += 15
-        breakdown.append(f"Level Strong ({sc}): +15")
+        breakdown.append(f"Уровень STRONG 🟢 ({sc:.1f}): +15")
+    # WEAK LEVEL (SC < 0) = -20
     elif sc < 0.0:
         score -= 20
-        breakdown.append(f"Level Weak ({sc}): -20")
+        breakdown.append(f"Уровень WEAK 🔴 ({sc:.1f}): -20")
     else:
-        breakdown.append(f"Level Moderate ({sc}): +0")
-
-    # 2. Regime (BTC)
-    # Expansion: +10
-    # Neutral/Compression: -10
+        breakdown.append(f"Уровень MEDIUM 🟡 ({sc:.1f}): 0")
+    
+    # 2. Режим BTC
     if market.regime == "EXPANSION":
         score += 10
-        breakdown.append("Regime (EXP): +10")
-    else:
+        breakdown.append("Режим EXPANSION: +10")
+    elif market.regime == "COMPRESSION":
         score -= 10
-        breakdown.append(f"Regime ({market.regime}): -10")
-
-    # 3. Volume/Sentiment
-    # High (Hot): +10
-    # Low (Cold): -10
-    if sentiment.is_hot:
-        score += 10
-        breakdown.append("Sentiment (HOT): +10")
+        breakdown.append("Режим COMPRESSION: -10")
     else:
-        score -= 10
-        breakdown.append("Sentiment (COLD): -10")
-
-    # 4. RSI Context
-    # Counter-trend extreme: +5
-    # Support & RSI < 35 -> +5
-    # Resistance & RSI > 65 -> +5
+        breakdown.append("Режим NEUTRAL: 0")
+    
+    # 3. Контекст RSI (только контртренд)
     event_type = event.get('event', '')
     is_support = "SUPPORT" in event_type
     
-    rsi_bonus = 0
     if is_support and market.rsi < 35:
-        rsi_bonus = 5
-        breakdown.append("RSI (Oversold): +5")
+        score += 5
+        breakdown.append(f"RSI Oversold ({market.rsi:.1f}): +5")
     elif not is_support and market.rsi > 65:
-        rsi_bonus = 5
-        breakdown.append("RSI (Overbought): +5")
+        score += 5
+        breakdown.append(f"RSI Overbought ({market.rsi:.1f}): +5")
     
-    score += rsi_bonus
-
-    # Clamp 0-100
-    if score < 0: score = 0
-    if score > 100: score = 100
+    # 4. HOT sentiment (высокий OI)
+    if sentiment.is_hot:
+        score += 10
+        breakdown.append("Sentiment HOT: +10")
+    else:
+        score -= 5
+        breakdown.append("Sentiment COLD: -5")
+    
+    # Клиппинг 0-100
+    score = max(0, min(100, int(score)))
     
     return PScoreResult(score, breakdown)

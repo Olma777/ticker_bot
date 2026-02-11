@@ -163,40 +163,61 @@ def _detect_liquidity_hunts(
 ) -> List[str]:
     """
     Detect where MM is hunting stop-losses.
-    Stops are typically placed just below support and above resistance.
+    РЕАЛЬНЫЕ стопы: 3-5% от уровня (НЕ ATR!)
     """
     verdict = []
     liquidity_zones = []
     
-    # ===== LONG LIQUIDATION ZONES (STOPS BELOW SUPPORT) =====
+    # ===== LONG LIQUIDATION ZONES (СТОПЫ ПОД ПОДДЕРЖКОЙ) =====
     for i, support in enumerate(supports[:2]):
-        # Typical stop placement: support - (1.5-2.0) * ATR
-        stop_hunt_zone = support['price'] - (atr * 1.5)
-        stop_hunt_zone_2 = support['price'] - (atr * 2.0)
+        # РЕАЛЬНЫЕ стопы: -3% и -5%
+        stop_hunt_zone = support['price'] * 0.97  # -3%
+        stop_hunt_zone_2 = support['price'] * 0.95  # -5%
         
-        verdict.append(f"  🩸 Стоп-лоссы ЛОНГИСТОВ: ${stop_hunt_zone:,.0f}-${stop_hunt_zone_2:,.0f} (под {support['price']:,.0f})")
+        verdict.append(
+            f"  🩸 Стоп-лоссы ЛОНГИСТОВ: "
+            f"${stop_hunt_zone_2:,.0f}-${stop_hunt_zone:,.0f} "
+            f"(под {support['price']:,.0f})"
+        )
         liquidity_zones.extend([stop_hunt_zone, stop_hunt_zone_2])
     
-    # ===== SHORT LIQUIDATION ZONES (STOPS ABOVE RESISTANCE) =====
+    # ===== SHORT LIQUIDATION ZONES (СТОПЫ НАД СОПРОТИВЛЕНИЕМ) =====
     for i, resistance in enumerate(resistances[:2]):
-        stop_hunt_zone = resistance['price'] + (atr * 1.5)
-        stop_hunt_zone_2 = resistance['price'] + (atr * 2.0)
+        stop_hunt_zone = resistance['price'] * 1.03  # +3%
+        stop_hunt_zone_2 = resistance['price'] * 1.05  # +5%
         
-        verdict.append(f"  🩸 Стоп-лоссы ШОРТИСТОВ: ${stop_hunt_zone:,.0f}-${stop_hunt_zone_2:,.0f} (над {resistance['price']:,.0f})")
+        verdict.append(
+            f"  🩸 Стоп-лоссы ШОРТИСТОВ: "
+            f"${resistance['price']:,.0f}-${stop_hunt_zone_2:,.0f} "
+            f"(над {resistance['price']:,.0f})"
+        )
         liquidity_zones.extend([stop_hunt_zone, stop_hunt_zone_2])
     
     # ===== LIQUIDITY CLUSTERS =====
     if len(liquidity_zones) >= 2:
-        verdict.append(f"  🎯 Кластер ликвидности: ${min(liquidity_zones):,.0f}-${max(liquidity_zones):,.0f}")
+        verdict.append(
+            f"  🎯 Кластер ликвидности: "
+            f"${min(liquidity_zones):,.0f}-${max(liquidity_zones):,.0f}"
+        )
     
     # ===== IMMINENT HUNT WARNING =====
-    if supports and price - supports[0]['price'] < atr * 1.5:
-        hunt_target = supports[0]['price'] - (atr * 1.8)
-        verdict.append(f"  ⚠️ Вероятная охота: MM может сходить к ${hunt_target:,.0f} за стопами перед разворотом")
+    if supports:
+        dist_to_support = (price - supports[0]['price']) / price * 100
+        if 0 < dist_to_support < 3.0:  # Цена в 3% от поддержки
+            hunt_target = supports[0]['price'] * 0.95
+            verdict.append(
+                f"  ⚠️ Вероятная охота: MM может сходить к "
+                f"${hunt_target:,.0f} за стопами перед разворотом"
+            )
     
-    if resistances and resistances[0]['price'] - price < atr * 1.5:
-        hunt_target = resistances[0]['price'] + (atr * 1.8)
-        verdict.append(f"  ⚠️ Вероятная охота: MM может сходить к ${hunt_target:,.0f} за стопами перед откатом")
+    if resistances:
+        dist_to_resist = (resistances[0]['price'] - price) / price * 100
+        if 0 < dist_to_resist < 3.0:  # Цена в 3% от сопротивления
+            hunt_target = resistances[0]['price'] * 1.05
+            verdict.append(
+                f"  ⚠️ Вероятная охота: MM может сходить к "
+                f"${hunt_target:,.0f} за стопами перед откатом"
+            )
     
     return verdict
 
