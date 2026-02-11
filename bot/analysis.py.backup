@@ -232,52 +232,53 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 
 # --- 3. SNIPER ---
 
-
-# ===== AI ANALYST - FORCED MODE =====
-try:
-    from bot.ai_analyst import get_ai_sniper_analysis
-    AI_ANALYST_AVAILABLE = True
-    logger.info("✅ AI Analyst FORCED MODE - ENABLED")
-except ImportError as e:
-    AI_ANALYST_AVAILABLE = False
-    logger.error(f"❌ AI Analyst MISSING - BOT WILL FAIL: {e}")
-
 async def get_sniper_analysis(ticker: str, language: str = "ru") -> str:
-    """FORCED AI ANALYST - NO FALLBACK"""
-    
-    if not AI_ANALYST_AVAILABLE:
-        return f"""❌ <b>SYSTEM ERROR</b>
-        
-AI Analyst module is missing.
-File: bot/ai_analyst.py
-Command: /sniper {ticker}
-Time: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
-
-Please contact support.
-"""
-    
-    try:
-        logger.info(f"🎯 AI Analyst processing: {ticker}")
-        analysis = await get_ai_sniper_analysis(ticker)
-        
-        # Verify we got REAL TP values
-        if "TP1:" in analysis and "N/A" not in analysis:
-            return analysis
-        else:
-            logger.error(f"❌ AI Analyst returned incomplete data for {ticker}")
-            return analysis  # Still return it for debugging
+    """
+    Generate professional analysis using AI Analyst.
+    Falls back to legacy analysis if AI fails.
+    """
+    # PRIORITY 1: Use AI Analyst (your professional template)
+    if AI_ANALYST_AVAILABLE:
+        try:
+            logger.info(f"🎯 Using AI Analyst for {ticker}")
+            analysis = await get_ai_sniper_analysis(ticker)
             
-    except Exception as e:
-        logger.error(f"❌ AI Analyst critical error: {e}")
-        return f"""❌ <b>AI ANALYST CRASHED</b>
-        
-Error: {str(e)[:200]}
+            # Basic validation of AI output
+            if analysis and len(analysis) > 50 and "⚠️" not in analysis[:100]:
+                return analysis
+            else:
+                logger.warning(f"AI analysis failed quality check for {ticker}")
+                # Fall through to legacy
+        except Exception as e:
+            logger.error(f"❌ AI Analyst failed for {ticker}: {e}")
+            # Fall through to legacy
+    
+    # PRIORITY 2: Legacy analysis (backup - KEEP EXISTING CODE)
+    logger.info(f"🔄 Using legacy analysis for {ticker}")
 
-{ticker} | {datetime.now(timezone.utc).strftime("%H:%M UTC")}
-"""
+    price_data, error = await get_crypto_price(ticker)
+    if not price_data:
+        return f"⚠️ Не удалось найти {ticker}."
 
-print("✅ STEP 2: analysis.py force mode code prepared")
-mt(val: float) -> str:
+    indicators = await get_technical_indicators(ticker)
+    if not indicators:
+        return f"⚠️ Ошибка получения индикаторов для {ticker}."
+
+    curr_price = indicators['price']
+    change = indicators['change']
+    calc_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    
+    p_score = indicators['p_score']
+    strat = indicators['strategy']
+    
+    # Determine sentiment
+    try:
+        f_val = float(indicators['funding'].strip('%').replace('+', ''))
+        sentiment = "Бычье" if f_val > 0.01 else "Медвежье" if f_val < -0.01 else "Нейтральное"
+    except (ValueError, AttributeError):
+        sentiment = "N/A"
+
+    def fmt(val: float) -> str:
         return f"${val:.4f}" if isinstance(val, (int, float)) and val > 0 else "N/A"
     
     entry_str = fmt(strat['entry'])
