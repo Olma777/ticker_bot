@@ -3,7 +3,7 @@ Market Lens Telegram Bot - Main Entry Point
 """
 
 import asyncio
-import logging
+# import logging  # Removed to avoid conflict with structlog
 import sys
 import os
 import re
@@ -16,13 +16,14 @@ from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import structlog  # Added import
 
 from bot.db import init_db, get_user_setting, set_user_setting, delete_user_setting, get_all_users_for_hour
 from bot.prices import get_crypto_price, get_market_summary
 from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan
 from bot.validators import SymbolValidator, InvalidSymbolError
 from bot.prices import PriceUnavailableError
-from bot.logger import configure_logging, logger
+from bot.logger import configure_logging  # Removed logger import to avoid circular dep or re-init
 from bot.utils import batch_process
 
 # --- CONFIGURATION ---
@@ -35,8 +36,8 @@ if not TOKEN:
     sys.exit(1)
 
 # --- LOGGING ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+configure_logging(json_logs=True)
+logger = structlog.get_logger()
 
 # --- BOT INITIALIZATION ---
 bot = Bot(token=TOKEN)
@@ -315,7 +316,7 @@ async def cmd_test_post(message: Message) -> None:
 
 async def main() -> None:
     """Main entry point."""
-    configure_logging(json_logs=True)
+    # configure_logging(json_logs=True)  # Already configured globally
     logger.info("bot_started", version="v3.0")
     # Initialize database
     init_db()
