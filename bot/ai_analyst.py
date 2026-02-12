@@ -560,8 +560,19 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             "p_score": p_score,
             "kevlar_passed": True,
             "kevlar_reason": "Passed",
-            "logic_line1": f"Setup found: {direction} from {entry_level}",
-            "logic_line2": mm_verdict_lines[0] if mm_verdict_lines else "Market Neutral",
+            
+            # ========= NEW FIELDS =========
+            "mm_phase": mm_phase,
+            "mm_verdict": mm_verdict_lines,
+            "liquidity_hunts": liquidity_lines,
+            "spoofing_signals": _detect_spoofing_layering(price, vwap, rsi, funding, supports, resistances),
+            "strong_supports": _format_levels_for_display(strong_supports, 2),
+            "strong_resists": _format_levels_for_display(strong_resists, 2),
+            
+            # Logic
+            "logic_setup": f"Setup found: {direction} from {entry_level}",
+            "logic_summary": mm_verdict_lines[0] if mm_verdict_lines else "Market Neutral",
+            
             "rsi": rsi,
             "change": float(change.replace('%', '').replace('+', '')) if '%' in change else 0.0
         }

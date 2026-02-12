@@ -497,37 +497,77 @@ async def get_fundamental(symbol: str) -> str:
 
 
 def format_signal_html(signal: dict) -> str:
-    """Format trading signal with strict validation of all required fields."""
-    # Validate required fields
+    """Format trading signal with full MM analysis and liquidity data."""
+    
     required = ["symbol", "side", "entry", "sl", "tp1", "tp2", "tp3", "rrr", "p_score"]
     for field in required:
         if field not in signal:
             raise ValueError(f"Missing field: {field}")
     
-    # Calculate RRR for each TP level
+    side_emoji = "🟢 LONG" if signal['side'] == 'long' else '🔴 SHORT'
+    
     stop_dist = abs(signal["entry"] - signal["sl"])
     rrr_tp1 = abs(signal["tp1"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
     rrr_tp2 = abs(signal["tp2"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
     rrr_tp3 = abs(signal["tp3"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
     
-    # Format with precise levels and validation
+    # ----- MM PHASE -----
+    mm_phase = signal.get("mm_phase", "⚪ NEUTRAL")
+    mm_verdict = signal.get("mm_verdict", [])
+    mm_text = "\n".join(mm_verdict) if mm_verdict else "• Нейтральная фаза"
+    
+    # ----- LIQUIDITY HUNTS -----
+    liquidity = signal.get("liquidity_hunts", [])
+    liquidity_text = "\n".join(liquidity) if liquidity else "• Нет явных зон охоты"
+    
+    # ----- SPOOFING -----
+    spoofing = signal.get("spoofing_signals", [])
+    spoofing_text = "\n".join(spoofing) if spoofing else "• Нет признаков манипуляции"
+    
+    # ----- LEVELS -----
+    strong_supports = signal.get("strong_supports", "НЕТ")
+    strong_resists = signal.get("strong_resists", "НЕТ")
+    
+    # ----- LOGIC -----
+    logic_setup = signal.get("logic_setup", "No logic")
+    logic_summary = signal.get("logic_summary", "No summary")
+    
     return f"""
-💎 <b>{signal['symbol']}</b>
+💎 <b>{signal['symbol']}</b> | M30 SNIPER
 💰 ${signal['entry']:,.2f} ({signal.get('change', 0):+.2f}%)
-────────────────
+─────────────────────────
 🎯 P-Score: {signal['p_score']}/100
-🛡️ Kevlar: {'PASSED ✅' if signal.get('kevlar_passed') else 'BLOCKED ❌'}
+🛡️ Kevlar: {'ПРОЙДЕН ✅' if signal.get('kevlar_passed') else 'БЛОКИРОВАН ❌'}
 
-{'🟢 LONG' if signal['side'] == 'long' else '🔴 SHORT'}
-Вход: ${signal['entry']:,.2f}
-Стоп: ${signal['sl']:,.2f}
-TP1:  ${signal['tp1']:,.2f} ({rrr_tp1:.2f}x)
-TP2:  ${signal['tp2']:,.2f} ({rrr_tp2:.2f}x)
-TP3:  ${signal['tp3']:,.2f} ({rrr_tp3:.2f}x)
-RRR:  {signal['rrr']:.2f}
+{side_emoji}
+Вход:     <code>${signal['entry']:,.2f}</code>
+Стоп:     🔴 <code>${signal['sl']:,.2f}</code>
+TP1:      🟢 <code>${signal['tp1']:,.2f}</code> ({rrr_tp1:.2f}x)
+TP2:      🟢 <code>${signal['tp2']:,.2f}</code> ({rrr_tp2:.2f}x)
+TP3:      🟢 <code>${signal['tp3']:,.2f}</code> ({rrr_tp3:.2f}x)
+RRR (TP2): {signal['rrr']:.2f}
 
-ЛОГИКА:
-• {signal.get('logic_line1', 'No logic provided')}
-• {signal.get('logic_line2', 'No logic provided')}
-• RSI: {signal.get('rsi', 'N/A')} ({signal.get('rsi_regime', 'N/A')})
+─────────────────────────
+🧠 <b>SMART MONEY ФАЗА</b>
+{mm_phase}
+{mm_text}
+
+🩸 <b>ЛИКВИДНОСТЬ И СТОП-ОХОТА</b>
+{liquidity_text}
+
+🎭 <b>МАНИПУЛЯЦИИ / СПУФИНГ</b>
+{spoofing_text}
+
+📊 <b>КЛЮЧЕВЫЕ УРОВНИ</b>
+🟢 Поддержка: {strong_supports}
+🔴 Сопротивление: {strong_resists}
+
+⚙️ <b>ЛОГИКА СДЕЛКИ</b>
+• {logic_setup}
+• {logic_summary}
+• RSI: {signal.get('rsi', 'N/A')}
+
+─────────────────────────
+⚠️ Риск 1% | Лимитный ордер
+🕒 {datetime.now(timezone.utc).strftime('%H:%M UTC')}
 """
