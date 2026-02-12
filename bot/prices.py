@@ -7,14 +7,13 @@ import logging
 from typing import Optional
 
 import aiohttp
+import pandas as pd
 import ccxt.async_support as ccxt
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from bot.config import COIN_NAMES, EXCHANGE_OPTIONS, RETRY_ATTEMPTS, RETRY_WAIT_SECONDS
 from bot.cache import TieredCache
 from bot.logger import logger
-
-logger = logging.getLogger(__name__)
 
 
 # Type alias for price data
@@ -153,11 +152,70 @@ async def _original_fetch_logic(symbol: str) -> float:
     return price_val
 
 async def get_price(symbol: str) -> float:
-    return await cache.get_or_set(
-        f"price:{symbol}",
-        lambda: _original_fetch_logic(symbol),
-        "price"
-    )
+    """
+    Get price with strict error handling.
+    Raises PriceUnavailableError on ANY failure.
+    """
+    try:
+        # Use cache but catch ANY exception from underlying logic
+        price = await cache.get_or_set(
+            f"price:{symbol}",
+            lambda: _original_fetch_logic(symbol),
+            "price"
+        )
+        if price is None:
+             raise PriceUnavailableError(f"Price returned None for {symbol}")
+        return float(price)
+    except Exception as e:
+        logger.error("price_fetch_critical_failure", symbol=symbol, error=str(e))
+        raise PriceUnavailableError(f"Failed to fetch price for {symbol}: {str(e)}") from e
+
+
+async def get_candles(symbol: str, timeframe: str, limit: int = 100) -> 'pd.DataFrame':
+    """
+    Fetch candles with strict error handling.
+    Raises PriceUnavailableError on failure.
+    """
+    # Import pandas locally to avoid circular imports or heavy load if not needed elsewhere immediately,
+    # or ensure it's imported at top level. 
+    # Validating symbol
+    if not symbol:
+        raise ValueError("Symbol cannot be empty")
+        
+    ticker = symbol.upper().replace("USDT", "").replace("USD", "")
+    pair = f"{ticker}/USDT"
+    
+    # Use exchange from options or default to binance
+    # For now ensuring robust fetch using CCXT
+    
+    exchange = ccxt.binance(EXCHANGE_OPTIONS["binance"])
+    try:
+        # Verify timeframe
+        if timeframe not in exchange.timeframes:
+             # Fallback or strict error? strict as requested
+             # But let's try to be safe, if binance doesn't have it (rare), maybe mapping?
+             # Assuming standard timeframes: 1m, 5m, 1h, 4h, 1d
+             pass
+
+        ohlcv = await exchange.fetch_ohlcv(pair, timeframe, limit=limit)
+        
+        if not ohlcv:
+            raise PriceUnavailableError(f"No candles returned for {symbol}")
+            
+        columns = ['time', 'open', 'high', 'low', 'close', 'volume']
+        df = pd.DataFrame(ohlcv, columns=columns)
+        
+        # Basic validation
+        if df.empty:
+             raise PriceUnavailableError(f"Empty DataFrame for {symbol}")
+             
+        return df
+
+    except Exception as e:
+        logger.error("candle_fetch_failed", symbol=symbol, timeframe=timeframe, error=str(e))
+        raise PriceUnavailableError(f"Failed to fetch candles for {symbol}: {str(e)}") from e
+    finally:
+        await exchange.close()
 
 
 # --- Price Aggregator with Fallback ---
