@@ -203,8 +203,8 @@ def _detect_liquidity_hunts(
     liquidity_zones = []
     
     # ===== LONG LIQUIDATION ZONES (СТОПЫ ПОД ПОДДЕРЖКОЙ) =====
-    # ФИЛЬТР: Только ближайшие уровни (10%)
-    relevant_supports = [s for s in supports[:2] if abs(s['price'] - price) / price < 0.10]
+    # ФИЛЬТР: Только ближайшие уровни (5%)
+    relevant_supports = [s for s in supports[:2] if abs(s['price'] - price) / price < 0.05]
     
     for i, support in enumerate(relevant_supports):
         # РЕАЛЬНЫЕ стопы: -3% и -5%
@@ -219,8 +219,8 @@ def _detect_liquidity_hunts(
         liquidity_zones.extend([stop_hunt_zone, stop_hunt_zone_2])
     
     # ===== SHORT LIQUIDATION ZONES (СТОПЫ НАД СОПРОТИВЛЕНИЕМ) =====
-    # ФИЛЬТР: Только ближайшие уровни (10%)
-    relevant_resistances = [r for r in resistances[:2] if abs(r['price'] - price) / price < 0.10]
+    # ФИЛЬТР: Только ближайшие уровни (5%)
+    relevant_resistances = [r for r in resistances[:2] if abs(r['price'] - price) / price < 0.05]
     
     for i, resistance in enumerate(relevant_resistances):
         stop_hunt_zone = resistance['price'] * 1.03  # +3%
@@ -548,9 +548,48 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                  "type": "WAIT"
              }
 
-        # ============ STEP 7: RETURN SUCCESS ============
+        # ============ STEP 7: AI CONTEXTUAL ANALYSIS ============
+        from bot.analysis import _generate_ai_contextual_analysis
+
+        ai_analysis = ""
+        try:
+            # Вызываем AI только для валидных сделок с P-Score >= 35
+            if direction != "WAIT" and p_score >= Config.P_SCORE_THRESHOLD:
+                # Prepare all levels within 15% range for AI context
+                all_context_supports = [l for l in supports if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
+                all_context_resists = [l for l in resistances if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
+                
+                ai_analysis = await _generate_ai_contextual_analysis(
+                    ticker=ticker,
+                    price=price,
+                    change=change,
+                    rsi=rsi,
+                    funding=funding,
+                    oi=indicators.get('open_interest', 'N/A'),
+                    supports=all_context_supports,  # Pass ALL relevant levels
+                    resistances=all_context_resists,
+                    p_score=p_score,
+                    mm_phase=mm_phase,
+                    mm_verdict=mm_verdict_lines,
+                    liquidity_hunts=liquidity_lines,
+                    spoofing_signals=_detect_spoofing_layering(price, vwap, rsi, funding, supports, resistances),
+                    btc_regime=regime
+                )
+        except Exception as e:
+            logger.error(f"AI analysis integration failed: {e}")
+            ai_analysis = "⚠️ AI-анализ временно недоступен"
+
+        # ============ STEP 8: RETURN SUCCESS ============
         mm_block = []
         mm_block.extend(mm_verdict_lines)
+        
+        # DISPLAY ALL LEVELS WITHIN MAX_DIST_PCT (P1 Requirement)
+        visible_supports = [l for l in supports if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
+        visible_resists = [l for l in resistances if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
+        
+        # Sort by distance (closeness)
+        visible_supports.sort(key=lambda x: x['distance'])
+        visible_resists.sort(key=lambda x: x['distance'])
         
         return {
             "status": "OK",
@@ -572,8 +611,9 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             "mm_verdict": mm_verdict_lines,
             "liquidity_hunts": liquidity_lines,
             "spoofing_signals": _detect_spoofing_layering(price, vwap, rsi, funding, supports, resistances),
-            "strong_supports": _format_levels_for_display(strong_supports, 2),
-            "strong_resists": _format_levels_for_display(strong_resists, 2),
+            "strong_supports": _format_levels_for_display(visible_supports, 5), # Show up to 5
+            "strong_resists": _format_levels_for_display(visible_resists, 5),   # Show up to 5
+            "ai_analysis": ai_analysis,
             
             # Logic
             "logic_setup": f"Setup found: {direction} from {entry_level}",

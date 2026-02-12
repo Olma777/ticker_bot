@@ -242,6 +242,121 @@ async def analyze_token_fundamentals(ticker: str) -> str:
         return f"⚠️ Ошибка аудита: {e}"
 
 
+async def _generate_ai_contextual_analysis(
+    ticker: str,
+    price: float,
+    change: str,
+    rsi: float,
+    funding: float,
+    oi: str,
+    supports: list[dict],
+    resistances: list[dict],
+    p_score: int,
+    mm_phase: str,
+    mm_verdict: list[str],
+    liquidity_hunts: list[str],
+    spoofing_signals: list[str],
+    btc_regime: str
+) -> str:
+    """
+    ГЛУБОКИЙ СРЕДНЕСРОЧНЫЙ АНАЛИЗ МОНЕТЫ ЧЕРЕЗ OPENAI.
+    """
+    # 1. Форматирование уровней для промпта
+    sup_formatted = []
+    for l in supports[:5]:
+        emoji = "🟢" if l['score'] >= 3.0 else "🟡" if l['score'] >= 1.0 else "🔴"
+        strength = l.get('strength', 'N/A')
+        sup_formatted.append(f"      {emoji} ${l['price']:.2f} (Score: {l['score']:.1f}, {strength})")
+    
+    res_formatted = []
+    for l in resistances[:5]:
+        emoji = "🟢" if l['score'] >= 3.0 else "🟡" if l['score'] >= 1.0 else "🔴"
+        strength = l.get('strength', 'N/A')
+        res_formatted.append(f"      {emoji} ${l['price']:.2f} (Score: {l['score']:.1f}, {strength})")
+    
+    sup_text = "\n".join(sup_formatted) if sup_formatted else "      • НЕТ АКТИВНЫХ УРОВНЕЙ"
+    res_text = "\n".join(res_formatted) if res_formatted else "      • НЕТ АКТИВНЫХ УРОВНЕЙ"
+    
+    # 2. Форматирование MM анализа
+    mm_text = "\n".join([f"      {line}" for line in mm_verdict if line.strip()]) if mm_verdict else "      • Нейтральная фаза"
+    liq_text = "\n".join([f"      {line}" for line in liquidity_hunts if line.strip()]) if liquidity_hunts else "      • Нет явных зон охоты"
+    spoof_text = "\n".join([f"      {line}" for line in spoofing_signals if line.strip()]) if spoofing_signals else "      • Нет признаков манипуляции"
+    
+    # 3. Промпт (ТОЧНО по шаблону)
+    prompt = f"""
+    Пожалуйста, проведи глубокий среднесрочный анализ монеты {ticker}.
+
+    ТЕХНИЧЕСКИЕ ДАННЫЕ:
+    • Текущая цена: ${price:.2f} ({change})
+    • RSI (30m): {rsi:.1f}
+    • Funding Rate: {funding*100:.4f}%
+    • Open Interest: {oi}
+    • BTC Regime: {btc_regime}
+    • P-Score: {p_score}/100 (вероятность успешной сделки)
+
+    КЛЮЧЕВЫЕ УРОВНИ (индикаторная система):
+    
+    ПОДДЕРЖКА:
+    {sup_text}
+    
+    СОПРОТИВЛЕНИЕ:
+    {res_text}
+
+    ТЕКУЩАЯ ФАЗА РЫНКА (данные индикатора):
+    {mm_phase}
+    {mm_text}
+
+    ЗОНЫ ЛИКВИДНОСТИ (Liquidity Hunts):
+    {liq_text}
+
+    ПРИЗНАКИ МАНИПУЛЯЦИИ (Spoofing/Layering):
+    {spoof_text}
+
+    ---
+
+    ТЕБЕ НУЖНО:
+
+    1. КЛЮЧЕВЫЕ УРОВНИ ПОДДЕРЖКИ И СОПРОТИВЛЕНИЯ:
+       Выбери 2-3 САМЫХ СИЛЬНЫХ уровня из предоставленных.
+       Объясни, почему они важны (количество касаний, сила Score).
+       Если уровней нет — укажи, что рынок в поиске равновесия.
+
+    2. ТЕКУЩАЯ ФАЗА РЫНКА И СТРУКТУРА ТРЕНДА:
+       На основе данных индикатора (Accumulation/Distribution) и цены относительно VWAP:
+       • Фаза: накопление, бычий тренд, распределение, медвежий тренд, нейтральная
+       • Структура: восходящий канал, нисходящий тренд, боковик, разворотный паттерн
+
+    3. АНАЛИЗ НАСТРОЕНИЯ РЫНКА И ДЕЙСТВИЙ КРУПНЫХ ИГРОКОВ:
+       • Funding Rate: перегрет или нейтрален? Есть ли потенциал сквиза?
+       • Open Interest: растет/падает? Указывает на вход/выход крупных игроков?
+       • Аккумуляция/Распределение: что делают MM на границах диапазона?
+       • Liquidity Hunter: куда поведут цену за ликвидностью?
+       • Spoofing: есть ли ложные стены?
+
+    4. ФЬЮЧЕРСНЫЙ СИГНАЛ (ТОЛЬКО ОДНО НАПРАВЛЕНИЕ: LONG ИЛИ SHORT):
+       • Точка входа: оптимальный уровень (из предоставленных)
+       • Три тейк-профита: TP1, TP2, TP3 (в формате $X.XX)
+       • Stop Loss: уровень несостоятельности сценария
+       • Обоснование: почему именно этот сценарий?
+
+    ВАЖНО:
+    • Используй ТОЛЬКО предоставленные технические данные
+    • Не придумывай свои уровни — бери из списка выше
+    • Если P-Score < 35 или нет уровней — сигнал WAIT с объяснением
+    • Формат ответа: HTML для Telegram (теги <b>, <i>, <code>)
+    • НЕ ИСПОЛЬЗУЙ Markdown (**), ТОЛЬКО HTML
+    • Ответ должен быть на русском языке
+    """
+
+    try:
+        completion = await _call_openai(prompt, temperature=0.3)
+        return completion
+        
+    except Exception as e:
+        logger.error(f"AI contextual analysis failed: {e}")
+        return ""
+
+
 # --- 3. SNIPER ---
 
 
@@ -497,54 +612,72 @@ async def get_fundamental(symbol: str) -> str:
 
 
 def format_signal_html(signal: dict) -> str:
-    """Format trading signal with full MM analysis and liquidity data."""
+    """Форматирование торгового сигнала с полным MM и AI анализом."""
     
     required = ["symbol", "side", "entry", "sl", "tp1", "tp2", "tp3", "rrr", "p_score"]
     for field in required:
         if field not in signal:
             raise ValueError(f"Missing field: {field}")
     
-    side_emoji = "🟢 LONG" if signal['side'] == 'long' else '🔴 SHORT'
+    # ----- AI CONTEXTUAL ANALYSIS -----
+    ai_analysis = signal.get("ai_analysis", "")
+    ai_section = ""
+    if ai_analysis:
+        ai_section = f"""
+─────────────────────────
+🤖 <b>DEEP AI CONTEXT</b>
+{ai_analysis}
+"""
+    
+    side_emoji = "🟢 LONG" if signal['side'] == 'long' else '🔴 SHORT' if signal['side'] == 'short' else '⚪ WAIT'
     
     stop_dist = abs(signal["entry"] - signal["sl"])
     rrr_tp1 = abs(signal["tp1"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
     rrr_tp2 = abs(signal["tp2"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
     rrr_tp3 = abs(signal["tp3"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
     
-    # ----- MM PHASE -----
+    # ----- FILTERED MM VERDICT (без дублей) -----
     mm_phase = signal.get("mm_phase", "⚪ NEUTRAL")
     mm_verdict = signal.get("mm_verdict", [])
-    mm_text = "\n".join(mm_verdict) if mm_verdict else "• Нейтральная фаза"
+    filtered_verdict = []
+    for line in mm_verdict:
+        # Пропускаем строку с "• <b>Phase:</b>" - она уже выведена в mm_phase
+        if not line.strip().startswith("• <b>Phase:</b>"):
+            filtered_verdict.append(line)
     
-    # ----- LIQUIDITY HUNTS -----
+    mm_text = "\n".join(filtered_verdict) if filtered_verdict else "• Нет дополнительных сигналов"
+    
+    # ----- DEDUPLICATED LIQUIDITY -----
     liquidity_all = signal.get("liquidity_hunts", [])
-    # ----- LIQUIDITY HUNTS -----
-    liquidity_all = signal.get("liquidity_hunts", [])
-    # Intelligent Deduplication (One per type)
-    liquidity = []
+    unique_liquidity = []
     seen_patterns = set()
     
     for line in liquidity_all:
-        # Pattern matching: "  🩸 Стоп-лоссы ШОРТИСТОВ" vs "  🩸 Стоп-лоссы ЛОНГИСТОВ"
-        pattern = line.split(':')[0] if ':' in line else line
-        
+        if ":" in line:
+            pattern = line.split(":")[0]
+        else:
+            pattern = line[:20]  # Первые 20 символов
+            
         if pattern not in seen_patterns:
-            liquidity.append(line)
+            unique_liquidity.append(line)
             seen_patterns.add(pattern)
             
-    liquidity_text = "\n".join(liquidity) if liquidity else "• Нет явных зон охоты"
+    liquidity_text = "\n".join(unique_liquidity) if unique_liquidity else "• Нет явных зон охоты"
     
     # ----- SPOOFING -----
     spoofing = signal.get("spoofing_signals", [])
     spoofing_text = "\n".join(spoofing) if spoofing else "• Нет признаков манипуляции"
     
-    # ----- LEVELS -----
+    # ----- LEVELS (ПОКАЗЫВАЕМ ВСЕ, С ИКОНКАМИ) -----
     strong_supports = signal.get("strong_supports", "НЕТ")
     strong_resists = signal.get("strong_resists", "НЕТ")
     
     # ----- LOGIC -----
     logic_setup = signal.get("logic_setup", "No logic")
     logic_summary = signal.get("logic_summary", "No summary")
+    
+    # ----- RRR CALCULATION -----
+    # Already calc above
     
     return f"""
 💎 <b>{signal['symbol']}</b> | M30 SNIPER
@@ -575,7 +708,7 @@ RRR (TP2): {signal['rrr']:.2f}
 📊 <b>КЛЮЧЕВЫЕ УРОВНИ</b>
 🟢 Поддержка: {strong_supports}
 🔴 Сопротивление: {strong_resists}
-
+{ai_section}
 ⚙️ <b>ЛОГИКА СДЕЛКИ</b>
 • {logic_setup}
 • {logic_summary}

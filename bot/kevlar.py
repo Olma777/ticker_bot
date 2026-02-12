@@ -133,11 +133,20 @@ def check_safety_v2(
     
     # ============ ФИЛЬТР 3: RSI PANIC GUARD ============
     # RSI Panic Guard — защита от входа на панике
-    if ctx.rsi < 30 or ctx.rsi > 70:
-        return KevlarResult(
-            passed=False,
-            blocked_by=f"K3_RSI_PANIC (RSI {ctx.rsi:.1f} is extreme)"
-        )
+    # Блокируем ТОЛЬКО если сигнал слабый (P-Score < 50)
+    # Если сигнал сильный (Score > 50), оверсолд/овербот — это плюс.
+    
+    if p_score < Config.KEVLAR_STRONG_PSCORE: # < 50
+        if ctx.rsi < 30:
+             return KevlarResult(
+                passed=False,
+                blocked_by=f"K3_RSI_PANIC (RSI {ctx.rsi:.1f} < 30 & Score {p_score} < 50)"
+            )
+        if ctx.rsi > 70:
+            return KevlarResult(
+                passed=False,
+                blocked_by=f"K3_RSI_FOMO (RSI {ctx.rsi:.1f} > 70 & Score {p_score} < 50)"
+            )
     
     # ============ ФИЛЬТР 4: SENTIMENT TRAP ============
     # Funding rate based sentiment filtering

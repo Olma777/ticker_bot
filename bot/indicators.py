@@ -298,7 +298,7 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[d
         
         final_levels.append(lvl)
 
-    # Separate & Sort
+    # Separate based on PIVOT type (initial)
     supports = [l for l in final_levels if l['type'] == 'SUPPORT']
     resistances = [l for l in final_levels if l['type'] == 'RESISTANCE']
     
@@ -309,11 +309,27 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[d
     supports = [s for s in supports if abs(s['price'] - current_price) <= max_dist]
     resistances = [r for r in resistances if abs(r['price'] - current_price) <= max_dist]
     
-    # Sort by Score (Desc) then Price (Proximity)
-    supports.sort(key=lambda x: x['score'], reverse=True)
-    resistances.sort(key=lambda x: x['score'], reverse=True)
+    # P0 FIX: Reclassify Levels based on Current Price (Dynamic Validation)
+    # A pivot low above current price is RESISTANCE, not support.
+    # A pivot high below current price is SUPPORT, not resistance.
     
-    return supports[:3], resistances[:3]
+    all_valid_levels = supports + resistances
+    final_supports = []
+    final_resistances = []
+    
+    for lvl in all_valid_levels:
+        if lvl['price'] < current_price:
+            lvl['type'] = 'SUPPORT'
+            final_supports.append(lvl)
+        elif lvl['price'] > current_price:
+            lvl['type'] = 'RESISTANCE'
+            final_resistances.append(lvl)
+    
+    # Sort by Score (Desc)
+    final_supports.sort(key=lambda x: x['score'], reverse=True)
+    final_resistances.sort(key=lambda x: x['score'], reverse=True)
+    
+    return final_supports[:3], final_resistances[:3]
 
 
 def calculate_legacy_p_score(
@@ -511,13 +527,17 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         # P0 FIX: Enforce 30m timeframe strict
         timeframe = "30m"
         
-        logger.info(f"🔍 FETCHING {ticker} 30m data from Binance...")
+        # Normalize Ticker (Remove /USDT if present to avoiding doubling)
+        clean_ticker = ticker.upper().replace("/USDT", "").replace("USDT", "")
+        pair = f"{clean_ticker}/USDT"
+        
+        logger.info(f"🔍 FETCHING {pair} 30m data from Binance...")
         
         # Fetch data in parallel
-        m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", timeframe, limit=1500)
+        m30_task = fetch_ohlcv_data(exchange, pair, timeframe, limit=1500)
         btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", timeframe, limit=1500)
-        funding_task = fetch_funding_rate(exchange, f"{ticker.upper()}/USDT")
-        oi_task = fetch_open_interest(exchange, f"{ticker.upper()}/USDT")
+        funding_task = fetch_funding_rate(exchange, pair)
+        oi_task = fetch_open_interest(exchange, pair)
 
         df, btc_df, funding_rate, open_interest = await asyncio.gather(
             m30_task, btc_task, funding_task, oi_task
@@ -525,7 +545,7 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         
         # === DIAGNOSTICS FOR DATA INTEGRITY ===
         logger.info("=" * 60)
-        logger.info(f"📊 DIAGNOSTICS FOR {ticker}")
+        logger.info(f"📊 DIAGNOSTICS FOR {pair}")
         logger.info("=" * 60)
         
         if df is None:

@@ -120,7 +120,7 @@ class Config:
     WA_DECAY = 0.35
     TMIN = 5
     ZONE_WIDTH_MULT = 0.5
-    MAX_DIST_PCT = 30.0          # <-- ADDED HOTFIX
+    MAX_DIST_PCT = 15.0          # <-- UPDATED HOTFIX (was 30.0)
     
     # --- RISK & LOGIC (NEW: SINGLE SOURCE OF TRUTH) ---
     # --- RISK & LOGIC (NEW: SINGLE SOURCE OF TRUTH) ---
