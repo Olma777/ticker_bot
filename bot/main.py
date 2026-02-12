@@ -230,7 +230,7 @@ async def cmd_sniper(message: Message) -> None:
     args = args_list[1] if len(args_list) > 1 else None
 
     if not args:
-        await message.answer("⚠️ Используйте: /sniper [TICKER]\nПример: /sniper LTC")
+        await message.answer("⚠️ Используйте: /sniper [TICKER]\nПример: <code>/sniper LTC</code>", parse_mode=ParseMode.HTML)
         return
     
     try:
