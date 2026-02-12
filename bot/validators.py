@@ -20,5 +20,6 @@ class SymbolValidator:
         if len(sym) > 12 or not sym.replace("/", "").isalnum():
             raise InvalidSymbolError(f"Invalid format: {symbol}")
         if not any(sym.endswith(s) for s in SymbolValidator.ALLOWED_SUFFIXES):
-            raise InvalidSymbolError(f"Unsupported pair: {symbol}")
+            # Изменили сообщение об ошибке для проверки обновления кода
+            raise InvalidSymbolError(f"Unsupported pair (autofix failed): {symbol} -> {sym}")
         return sym
