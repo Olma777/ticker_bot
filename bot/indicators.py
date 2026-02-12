@@ -450,9 +450,14 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
     exchange = ccxt.binance(EXCHANGE_OPTIONS["binance"])
     
     try:
+        # P0 FIX: Enforce 30m timeframe strict
+        timeframe = "30m"
+        
+        logger.info(f"📊 FETCHING {ticker} on TIMEFRAME={timeframe}")
+        
         # Fetch data in parallel
-        m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", TRADING.timeframe, limit=1500)
-        btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", TRADING.timeframe, limit=1500)
+        m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", timeframe, limit=1500)
+        btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", timeframe, limit=1500)
         funding_task = fetch_funding_rate(exchange, f"{ticker.upper()}/USDT")
         oi_task = fetch_open_interest(exchange, f"{ticker.upper()}/USDT")
 
@@ -463,12 +468,55 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         if df is None or df.empty:
             return None
 
+        # P0 FIX: Verify Timeframe
+        if len(df) > 1:
+            time_diff = df['time'].iloc[-1] - df['time'].iloc[-2]
+            expected_diff = 30 * 60 * 1000 # 30 mins in ms
+            if time_diff != expected_diff:
+                logger.error(f"❌ WRONG TIMEFRAME! Expected 30m (1800000ms), got {time_diff}ms")
+                # We could raise here, but for now let's just error log and maybe correct?
+                # Actually, if we requested "30m" and got wrong data, it's an exchange/ccxt issue.
+            else:
+                 logger.info(f"✅ Timeframe verified: 30m")
+
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
         regime, safety = calculate_global_regime(btc_df)
         m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
         
         current_price = df['close'].iloc[-1]
+        
+        # Log basics
+        earliest = df['time'].iloc[0]
+        latest = df['time'].iloc[-1]
+        span_hours = (latest - earliest) / (1000 * 60 * 60)
+        logger.info(f"✅ Received {len(df)} candles spanning {span_hours:.1f} hours")
+        logger.info(f"   Current price: ${current_price:.2f}")
+
+        # P1 FIX: Reclassify Levels based on Current Price
+        # (Ghost levels already filtered by process_levels)
+        
+        all_levels = m30_sup + m30_res
+        
+        real_supports = []
+        real_resistances = []
+        
+        for lvl in all_levels:
+            if lvl['price'] < current_price:
+                lvl['type'] = 'SUPPORT'
+                real_supports.append(lvl)
+            elif lvl['price'] > current_price:
+                lvl['type'] = 'RESISTANCE'
+                real_resistances.append(lvl)
+            # Equal price - ignore or keep as is (unlikely float exact match)
+        
+        # Sort again just in case
+        real_supports.sort(key=lambda x: x['score'], reverse=True)
+        real_resistances.sort(key=lambda x: x['score'], reverse=True)
+        
+        m30_sup = real_supports[:3]
+        m30_res = real_resistances[:3]
+
         m30_atr = df['atr'].iloc[-1]
         m30_rsi = df['rsi'].iloc[-1]
         vwap_24h = calculate_vwap_24h(df)

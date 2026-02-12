@@ -518,13 +518,19 @@ def format_signal_html(signal: dict) -> str:
     
     # ----- LIQUIDITY HUNTS -----
     liquidity_all = signal.get("liquidity_hunts", [])
-    # Deduplicate preserving order
+    # ----- LIQUIDITY HUNTS -----
+    liquidity_all = signal.get("liquidity_hunts", [])
+    # Intelligent Deduplication (One per type)
     liquidity = []
-    seen = set()
+    seen_patterns = set()
+    
     for line in liquidity_all:
-        if line not in seen:
+        # Pattern matching: "  🩸 Стоп-лоссы ШОРТИСТОВ" vs "  🩸 Стоп-лоссы ЛОНГИСТОВ"
+        pattern = line.split(':')[0] if ':' in line else line
+        
+        if pattern not in seen_patterns:
             liquidity.append(line)
-            seen.add(line)
+            seen_patterns.add(pattern)
             
     liquidity_text = "\n".join(liquidity) if liquidity else "• Нет явных зон охоты"
     
