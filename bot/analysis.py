@@ -242,6 +242,50 @@ async def analyze_token_fundamentals(ticker: str) -> str:
         return f"⚠️ Ошибка аудита: {e}"
 
 
+def _clean_telegram_html(text: str) -> str:
+    """
+    Удаляет все теги, не поддерживаемые Telegram HTML.
+    Оставляет только: b, strong, i, em, u, ins, s, strike, del, code, pre, span
+    """
+    import re
+    
+    # Список разрешенных тегов
+    allowed_tags = [
+        'b', 'strong', 'i', 'em', 'u', 'ins', 
+        's', 'strike', 'del', 'code', 'pre', 'span'
+    ]
+    
+    # 1. Удалить все теги, кроме разрешенных
+    def remove_tag(match):
+        tag_name = match.group(2).lower()
+        if tag_name in allowed_tags:
+            return match.group(0)
+        return ''
+    
+    # Удаляем открывающие и закрывающие теги
+    text = re.sub(r'<(/?)"?([^>\s"]+)[^>]*>', remove_tag, text)
+    
+    # 2. Заменяем нумерованные списки на обычный текст
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        # Заменяем <ol> и <ul> на пустую строку
+        if re.match(r'\s*</?[ou]l>', line):
+            continue
+        # Заменяем <li> на • (буллит)
+        line = re.sub(r'\s*<li>\s*', '  • ', line)
+        line = re.sub(r'\s*</li>\s*', '', line)
+        # Заменяем нумерацию "1." на "1."
+        cleaned_lines.append(line)
+    
+    # 3. Удаляем множественные пустые строки
+    text = '\n'.join(cleaned_lines)
+    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+    
+    return text.strip()
+
+
 async def _generate_ai_contextual_analysis(
     ticker: str,
     price: float,
@@ -305,11 +349,18 @@ async def _generate_ai_contextual_analysis(
     4. СИГНАЛ: (направление, вход, TP1, TP2, TP3, SL из данных выше)
 
     ТОЛЬКО HTML, БЕЗ Markdown. Кратко, по делу.
+
+    ВАЖНОЕ ТРЕБОВАНИЕ ПО ФОРМАТИРОВАНИЮ:
+    - ЗАПРЕЩЕНО использовать теги <ol>, <ul>, <li>, <h1>, <h2>, <div>, <p>, <br>
+    - РАЗРЕШЕНЫ только: <b>, <i>, <code>, <pre>
+    - Для списков используй простые цифры с точкой (1. Текст) и перенос строки
+    - НЕ ИСПОЛЬЗУЙ никакие другие HTML теги
+    - НЕ ИСПОЛЬЗУЙ Markdown (**)
     """
 
     try:
         completion = await _call_openai(prompt, temperature=0.3)
-        return completion
+        return _clean_telegram_html(completion)
         
     except Exception as e:
         logger.error(f"AI contextual analysis failed: {e}")
@@ -638,7 +689,7 @@ def format_signal_html(signal: dict) -> str:
     # ----- RRR CALCULATION -----
     # Already calc above
     
-    return f"""
+    final_text = f"""
 💎 <b>{signal['symbol']}</b> | M30 SNIPER
 💰 ${signal['entry']:,.2f} ({signal.get('change', 0):+.2f}%)
 ─────────────────────────
@@ -677,3 +728,4 @@ RRR (TP2): {signal['rrr']:.2f}
 ⚠️ Риск 1% | Лимитный ордер
 🕒 {datetime.now(timezone.utc).strftime('%H:%M UTC')}
 """
+    return _clean_telegram_html(final_text)

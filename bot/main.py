@@ -365,6 +365,8 @@ async def cmd_test_post(message: Message) -> None:
 # --- MAIN ---
 
 import fcntl
+import os # Added import for os
+import sys # Added import for sys
 
 async def main() -> None:
     """Main entry point with single-instance lock."""
