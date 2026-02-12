@@ -380,7 +380,7 @@ async def main() -> None:
     # ==============================
 
     # configure_logging(json_logs=True)  # Already configured globally
-    logger.info("bot_started", version="v3.0")
+    logger.info("bot_started", version="v3.7-alpha1")
     # Initialize database
     init_db()
     
