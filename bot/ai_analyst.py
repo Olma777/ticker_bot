@@ -617,7 +617,7 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             
             # Logic
             "logic_setup": f"Setup found: {direction} from {entry_level}",
-            "logic_summary": mm_verdict_lines[0] if mm_verdict_lines else "Market Neutral",
+            "logic_summary": mm_verdict_lines[0].lstrip("• ").strip() if mm_verdict_lines else "Market Neutral",
             
             "rsi": rsi,
             "change": float(change.replace('%', '').replace('+', '')) if '%' in change else 0.0
