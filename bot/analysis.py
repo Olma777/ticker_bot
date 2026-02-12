@@ -17,6 +17,7 @@ from bot.prices import get_crypto_price
 from bot.indicators import get_technical_indicators
 from bot.cache import TieredCache
 from bot.logger import logger
+from bot.order_calc import validate_signal
 
 logger = logging.getLogger(__name__)
 
@@ -268,18 +269,29 @@ Please contact support.
 """
     
     try:
-        # LEGACY: logger.info(f\"🎯 AI Analyst processing: {ticker}\")
+        # LEGACY: logger.info(f"🎯 AI Analyst processing: {ticker}")
         start_ts = datetime.now(timezone.utc)
-        analysis = await get_ai_sniper_analysis(ticker)
+        signal = await get_ai_sniper_analysis(ticker)
         latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
         logger.info("llm_response", symbol=ticker, price=None, latency_ms=int(latency), tokens_used=None)
         
-        # Verify we got REAL TP values
-        if "TP1:" in analysis and "N/A" not in analysis:
-            return analysis
-        else:
-            logger.error(f"❌ AI Analyst returned incomplete data for {ticker}")
-            return analysis  # Still return it for debugging
+        # Handle WAIT signal
+        if signal.get("type") == "WAIT":
+            return f"""
+🚫 <b>{signal.get('symbol', ticker)} | WAIT</b>
+💰 ${signal.get('entry', 0):,.2f}
+────────────────
+🛑 <b>BLOCKED:</b> {signal.get('kevlar_reason', 'Unknown reason')}
+🎯 P-Score: {signal.get('p_score', 0)}/100
+🛡️ Kevlar: {'PASSED' if signal.get('kevlar_passed') else 'FAILED'}
+
+Логика:
+• {signal.get('logic_line1', 'N/A')}
+"""
+
+        # Handle TRADE signal
+        validate_signal(signal)
+        return format_signal_html(signal)
             
     except Exception as e:
         logger.error("llm_response_error", symbol=ticker, exc_info=True)
@@ -503,3 +515,40 @@ async def get_fundamental(symbol: str) -> str:
         lambda: _original_fetch_logic(symbol),
         "fundamental"
     )
+
+
+def format_signal_html(signal: dict) -> str:
+    """Format trading signal with strict validation of all required fields."""
+    # Validate required fields
+    required = ["symbol", "side", "entry", "sl", "tp1", "tp2", "tp3", "rrr", "p_score"]
+    for field in required:
+        if field not in signal:
+            raise ValueError(f"Missing field: {field}")
+    
+    # Calculate RRR for each TP level
+    stop_dist = abs(signal["entry"] - signal["sl"])
+    rrr_tp1 = abs(signal["tp1"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
+    rrr_tp2 = abs(signal["tp2"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
+    rrr_tp3 = abs(signal["tp3"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
+    
+    # Format with precise levels and validation
+    return f"""
+💎 <b>{signal['symbol']}</b>
+💰 ${signal['entry']:,.2f} ({signal.get('change', 0):+.2f}%)
+────────────────
+🎯 P-Score: {signal['p_score']}/100
+🛡️ Kevlar: {'PASSED ✅' if signal.get('kevlar_passed') else 'BLOCKED ❌'}
+
+{'🟢 LONG' if signal['side'] == 'long' else '🔴 SHORT'}
+Вход: ${signal['entry']:,.2f}
+Стоп: ${signal['sl']:,.2f}
+TP1:  ${signal['tp1']:,.2f} ({rrr_tp1:.2f}x)
+TP2:  ${signal['tp2']:,.2f} ({rrr_tp2:.2f}x)
+TP3:  ${signal['tp3']:,.2f} ({rrr_tp3:.2f}x)
+RRR:  {signal['rrr']:.2f}
+
+ЛОГИКА:
+• {signal.get('logic_line1', 'No logic provided')}
+• {signal.get('logic_line2', 'No logic provided')}
+• RSI: {signal.get('rsi', 'N/A')} ({signal.get('rsi_regime', 'N/A')})
+"""

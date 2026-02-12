@@ -8,6 +8,8 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
+from bot.models.market_context import MarketContext
+from bot.kevlar import check_safety_v2
 
 
 def draw_bar(value, total=100, length=10):
@@ -351,7 +353,7 @@ def _determine_market_phase(
 # PART 4: CORE AI ANALYST FUNCTION
 # ============================================
 
-async def get_ai_sniper_analysis(ticker: str) -> str:
+async def get_ai_sniper_analysis(ticker: str) -> Dict:
     """
     COMPLETE PIPELINE:
     1. INDICATOR → Levels, Score, RSI, ATR, VWAP, Funding, OI
@@ -537,105 +539,53 @@ async def get_ai_sniper_analysis(ticker: str) -> str:
         
         funding_text = f"{funding:+.4f}%" if funding != 0 else "0.0000%"
         
-        # ============ STEP 8: BUILD SIGNAL TEXT ============
-        if direction == "WAIT" or not order:
-            signal_text = f"""
-🚦 <b>Тип:</b> WAIT
-📊 <b>P-Score:</b> {p_score}% {'✅' if p_score >= 35 else '❌'}
-📌 <b>Причина:</b> {' • '.join(decision_reason) if decision_reason else 'Нет подходящего сигнала'}
-"""
-            entry_display = "N/A"
-            stop_display = "N/A"
-            tp1_display = "N/A"
-            tp2_display = "N/A"
-            tp3_display = "N/A"
-            rrr_display = "0.00"
-            size_display = "0.0000"
-        else:
-            # Format position size appropriately
-            if order.size_units > 100:
-                size_display = f"{order.size_units:.0f}"
-            elif order.size_units > 1:
-                size_display = f"{order.size_units:.2f}"
-            else:
-                size_display = f"{order.size_units:.4f}"
-            
-            signal_text = f"""
-🚦 <b>Тип:</b> {direction}
-🎯 <b>Вход:</b> <code>${order.entry:,.2f}</code> (Sc:{entry_score:.1f})
-🛡 <b>Stop Loss:</b> <code>${order.stop_loss:,.2f}</code>
-
-✅ <b>Тейк-профиты (ATR-based):</b>
-   • TP1: <code>${order.tp1:,.2f}</code> (0.75×ATR)
-   • TP2: <code>${order.tp2:,.2f}</code> (1.25×ATR)  
-   • TP3: <code>${order.tp3:,.2f}</code> (2.00×ATR)
-
-📊 <b>Risk/Reward (TP2):</b> 1:{order.rrr_tp2:.2f} {'✅' if order.rrr_tp2 >= 1.10 else '❌'}
-💰 <b>Размер позиции:</b> {size_display} ед. (1% риск, $1000)
-📏 <b>Дистанция стопа:</b> ${order.stop_dist:.2f} ({order.stop_dist/atr_value:.1f}×ATR)
-"""
-            entry_display = f"${order.entry:,.2f}"
-            stop_display = f"${order.stop_loss:,.2f}"
-            tp1_display = f"${order.tp1:,.2f}"
-            tp2_display = f"${order.tp2:,.2f}"
-            tp3_display = f"${order.tp3:,.2f}"
-            rrr_display = f"{order.rrr_tp2:.2f}"
+        # ============ STEP 8: KEVLAR SAFETY CHECK ============
+        ctx = MarketContext(
+            symbol=ticker,
+            price=price,
+            btc_regime=regime.lower(),
+            atr=atr_value,
+            vwap=vwap,
+            funding_rate=funding,
+            timestamp=datetime.now()
+        )
         
-        # ============ STEP 9: BUILD MM BEHAVIOR BLOCK ============
+        kevlar_passed = False
+        kevlar_reason = "No signal"
+        
+        if direction != "WAIT":
+            event_type = "SUPPORT" if direction == "LONG" else "RESISTANCE"
+            event = {"event": event_type, "level": str(entry_level)}
+            # p_score is already available
+            kevlar_res = check_safety_v2(event, ctx, p_score)
+            kevlar_passed = kevlar_res.passed
+            kevlar_reason = kevlar_res.blocked_by
+        
+        # ============ STEP 9: RETURN STRUCTURED DATA ============
         mm_block = []
         mm_block.extend(mm_verdict_lines)
-        
         if liquidity_lines:
-            mm_block.append("• <b>Liquidity Hunter (охота за стопами):</b>")
-            mm_block.extend(liquidity_lines[:4])  # Top 4 most important
+            mm_block.append(f"Liquidity: {', '.join(liquidity_lines[:2])}")
         
-        if spoofing_lines:
-            mm_block.append("• <b>Spoofing/Layering (манипуляция):</b>")
-            mm_block.extend(spoofing_lines[:3])  # Top 3 most important
-        
-        mm_block.append(f"• <b>Open Interest Trend:</b> {oi_trend}")
-        
-        # ============ STEP 10: FINAL OUTPUT - NEW CARD UI DESIGN ============
-        # Format bars
-        rsi_bar = draw_bar(rsi, 100, 10)
-        pscore_bar = draw_bar(p_score, 100, 10)
-        
-        # Direction emojis
-        direction_emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "⚪"
-        change_emoji = "📈" if "+" in change else "📉"
-        
-        # Kevlar status
-        kevlar_status = "ON" if p_score >= 70 and abs(rsi - 50) >= 20 else "OFF"
-        
-        decision_reason_text = ' • '.join(decision_reason) if decision_reason else 'Нет активного сигнала'
-        mm_analysis_text = chr(10).join(mm_block[:5]) if mm_block else 'Нет данных'
-        
-        # Format order values for display
-        entry_value = f"${order.entry:,.2f}" if order else "N/A"
-        stop_value = f"${order.stop_loss:,.2f}" if order else "N/A"
-        
-        # Get RSI status in Russian
-        rsi_status = "Перепродан" if rsi < 30 else "Нейтрален" if rsi < 70 else "Перекуплен"
-        
-        return f"""
-💎 <b>{ticker.upper()}</b>
-💰 ${price:,.2f} ({change_emoji} {change})
-────────────────
-📊 <b>Metrics</b>
-RSI:    {rsi_bar} {rsi:.1f} ({rsi_status})
-Score:  {pscore_bar} {p_score}/100
-
-<b>Сигнал:</b> {direction} {direction_emoji}
-<b>Вход:</b> {entry_value}
-<b>Стоп:</b> {stop_value}
-<b>Kevlar:</b> {kevlar_status}
-
-<b>ЛОГИКА РЕШЕНИЯ:</b>
-{decision_reason_text}
-
-<b>MM АНАЛИЗ:</b>
-{mm_analysis_text}
-"""
+        return {
+            "type": "TRADE" if direction != "WAIT" else "WAIT",
+            "symbol": ticker,
+            "side": direction.lower(),
+            "entry": entry_level,
+            "sl": order.stop_loss if order else 0.0,
+            "tp1": order.tp1 if order else 0.0,
+            "tp2": order.tp2 if order else 0.0,
+            "tp3": order.tp3 if order else 0.0,
+            "rrr": order.rrr_tp2 if order else 0.0,
+            "p_score": p_score,
+            "kevlar_passed": kevlar_passed,
+            "kevlar_reason": kevlar_reason,
+            "logic_line1": decision_reason[0] if decision_reason else "No logic provided",
+            "logic_line2": mm_verdict_lines[0] if mm_verdict_lines else "Market Neutral",
+            "rsi": rsi,
+            "rsi_regime": "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL",
+            "change": float(change.replace('%', '').replace('+', '')) if '%' in change else 0.0
+        }
         
     except Exception as e:
         logger.error(f"AI Analyst critical error: {e}", exc_info=True)

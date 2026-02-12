@@ -40,8 +40,8 @@ async def process_signal(payload: dict) -> DecisionResult:
     # 2. Calculate P-Score
     p_score_res = calculate_score(payload, market, sentiment)
     
-    # 3. Check Safety (Kevlar)
-    kevlar_res = check_safety(payload, market, sentiment, p_score_res.score)
+    # 3. Check Safety (Kevlar v2)
+    kevlar_res = check_safety_v2(payload, market, p_score_res.score)
     
     # 4. Decision Logic
     decision = "WAIT"

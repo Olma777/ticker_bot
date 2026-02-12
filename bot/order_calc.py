@@ -141,3 +141,14 @@ def _blocked_plan(reason: str) -> OrderPlan:
         stop_dist=0.0, risk_amount=0.0, size_units=0.0, rrr_tp2=0.0,
         reason_blocked=reason
     )
+
+
+def validate_signal(signal: dict) -> bool:
+    """Validate that signal contains all required fields for execution."""
+    required = ["entry", "sl", "tp1", "tp2", "tp3", "rrr"]
+    missing = [f for f in required if f not in signal or not signal[f]]
+    if missing:
+        raise ValueError(f"Invalid signal: missing {missing}")
+    if signal["rrr"] < 1.1:
+        raise ValueError(f"RRR too low: {signal['rrr']:.2f} < 1.10")
+    return True
