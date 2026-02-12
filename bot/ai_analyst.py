@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # PART 1: INDICATOR DATA PARSING
 # ============================================
 
-def _parse_levels(level_str: str) -> List[Dict]:
+def _parse_levels(level_str: str, current_price: float) -> List[Dict]:
     """Parse level string from INDICATOR into list of level dictionaries"""
     levels = []
     if not level_str or level_str == "НЕТ":
@@ -58,6 +58,7 @@ def _parse_levels(level_str: str) -> List[Dict]:
                 is_support = "SUP" in part or "поддержка" in part.lower()
                 levels.append({
                     'price': price,
+                    'distance': abs(current_price - price),
                     'score': score,
                     'is_support': is_support,
                     'strength': 'STRONG' if score >= 3.0 else 'MEDIUM' if score >= 1.0 else 'WEAK'
@@ -475,8 +476,12 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         support_str = indicators.get('support', 'НЕТ')
         resistance_str = indicators.get('resistance', 'НЕТ')
         
-        supports = _parse_levels(support_str)
-        resistances = _parse_levels(resistance_str)
+        if not indicators.get('support'):
+             # Fallback if specific keys missing but string raw exists?
+             pass
+
+        supports = _parse_levels(support_str, price)
+        resistances = _parse_levels(resistance_str, price)
         
         # ... (Rest of parsing logic) ...
         
