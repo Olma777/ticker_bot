@@ -563,14 +563,11 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         
     except Exception as e:
         logger.error(f"AI Analyst critical error: {e}", exc_info=True)
-        return f"""❌ <b>AI ANALYST ERROR</b>
-        
-Тикер: {ticker}
-Ошибка: {str(e)[:200]}
-Время: {datetime.now(timezone.utc).strftime("%H:%M UTC")}
-
-Пожалуйста, проверьте логи и сообщите разработчику.
-"""
+        return {
+            "status": "ERROR",
+            "reason": str(e),
+            "symbol": ticker
+        }
 
 
 # ============================================
