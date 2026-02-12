@@ -281,9 +281,12 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[d
         # Sc = (Wt * Touches) - (Wa * Age/100)
         # Note: Pine has complex reactivity. We approximate.
         
-        score = (WT * touches) - (WA * (age_bars / 100.0)) # UPDATED
+        score = (WT * touches) - (WA * (age_bars / 100.0))
         
-        if age_bars < TMIN: # UPDATED
+        # Clamp Score (Pine Script Compatibility)
+        score = max(-100.0, min(10.0, score))
+        
+        if age_bars < TMIN:
             score = 0 # Newborn
             
         lvl['score'] = score
@@ -294,6 +297,13 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[d
     # Separate & Sort
     supports = [l for l in final_levels if l['type'] == 'SUPPORT']
     resistances = [l for l in final_levels if l['type'] == 'RESISTANCE']
+    
+    # Filter by Distance (Anti-Hallucination)
+    current_price = df['close'].iloc[-1]
+    max_dist = current_price * (max_dist_pct / 100.0)
+    
+    supports = [s for s in supports if abs(s['price'] - current_price) <= max_dist]
+    resistances = [r for r in resistances if abs(r['price'] - current_price) <= max_dist]
     
     # Sort by Score (Desc) then Price (Proximity)
     supports.sort(key=lambda x: x['score'], reverse=True)

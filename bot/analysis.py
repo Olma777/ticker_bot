@@ -517,7 +517,15 @@ def format_signal_html(signal: dict) -> str:
     mm_text = "\n".join(mm_verdict) if mm_verdict else "• Нейтральная фаза"
     
     # ----- LIQUIDITY HUNTS -----
-    liquidity = signal.get("liquidity_hunts", [])
+    liquidity_all = signal.get("liquidity_hunts", [])
+    # Deduplicate preserving order
+    liquidity = []
+    seen = set()
+    for line in liquidity_all:
+        if line not in seen:
+            liquidity.append(line)
+            seen.add(line)
+            
     liquidity_text = "\n".join(liquidity) if liquidity else "• Нет явных зон охоты"
     
     # ----- SPOOFING -----

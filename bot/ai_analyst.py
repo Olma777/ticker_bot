@@ -203,7 +203,10 @@ def _detect_liquidity_hunts(
     liquidity_zones = []
     
     # ===== LONG LIQUIDATION ZONES (СТОПЫ ПОД ПОДДЕРЖКОЙ) =====
-    for i, support in enumerate(supports[:2]):
+    # ФИЛЬТР: Только ближайшие уровни (10%)
+    relevant_supports = [s for s in supports[:2] if abs(s['price'] - price) / price < 0.10]
+    
+    for i, support in enumerate(relevant_supports):
         # РЕАЛЬНЫЕ стопы: -3% и -5%
         stop_hunt_zone = support['price'] * 0.97  # -3%
         stop_hunt_zone_2 = support['price'] * 0.95  # -5%
@@ -216,7 +219,10 @@ def _detect_liquidity_hunts(
         liquidity_zones.extend([stop_hunt_zone, stop_hunt_zone_2])
     
     # ===== SHORT LIQUIDATION ZONES (СТОПЫ НАД СОПРОТИВЛЕНИЕМ) =====
-    for i, resistance in enumerate(resistances[:2]):
+    # ФИЛЬТР: Только ближайшие уровни (10%)
+    relevant_resistances = [r for r in resistances[:2] if abs(r['price'] - price) / price < 0.10]
+    
+    for i, resistance in enumerate(relevant_resistances):
         stop_hunt_zone = resistance['price'] * 1.03  # +3%
         stop_hunt_zone_2 = resistance['price'] * 1.05  # +5%
         
