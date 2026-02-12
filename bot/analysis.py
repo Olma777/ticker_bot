@@ -39,6 +39,32 @@ daily_cache: dict[str, str] = {}
 
 # --- HELPER FUNCTIONS ---
 
+def _format_price(price: float) -> str:
+    """
+    Адаптивное форматирование цены для Telegram.
+    Критично для активов < $1 (HBAR, SHIB и т.д.)
+    """
+    if price is None or price == 0:
+        return "$0"
+    
+    abs_price = abs(price)
+    
+    if abs_price >= 10000:
+        return f"${price:,.0f}"
+    elif abs_price >= 1000:
+        return f"${price:,.2f}"
+    elif abs_price >= 1:
+        return f"${price:.2f}"
+    elif abs_price >= 0.1:
+        return f"${price:.3f}"
+    elif abs_price >= 0.01:
+        return f"${price:.4f}"
+    elif abs_price >= 0.001:
+        return f"${price:.5f}"
+    else:
+        return f"${price:.6f}"
+
+
 async def fetch_ticker_multisource(
     exchanges: dict[str, ccxt.Exchange], 
     symbol: str
@@ -246,44 +272,52 @@ def _clean_telegram_html(text: str) -> str:
     """
     Удаляет все теги, не поддерживаемые Telegram HTML.
     Оставляет только: b, strong, i, em, u, ins, s, strike, del, code, pre, span
+    Критическое исправление: Обрабатывает списки ДО удаления тегов.
     """
+    if not text:
+        return ""
+
     import re
     
-    # Список разрешенных тегов
-    allowed_tags = [
+    # 1. Сначала обрабатываем списки, пока теги живы
+    # Заменяем <li> на буллет с новой строки
+    text = re.sub(r'<li[^>]*>', '\n  • ', text, flags=re.IGNORECASE)
+    # Удаляем закрывающие </li>, <ul>, <ol>
+    text = re.sub(r'</li[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?[ou]l[^>]*>', '', text, flags=re.IGNORECASE)
+    
+    # 2. Заменяем <br> и <p> на переносы строк
+    text = re.sub(r'<br[^>]*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</p[^>]*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<p[^>]*>', '', text, flags=re.IGNORECASE)
+
+    allowed_tags = {
         'b', 'strong', 'i', 'em', 'u', 'ins', 
-        's', 'strike', 'del', 'code', 'pre', 'span'
-    ]
+        's', 'strike', 'del', 'code', 'pre', 'span', 'a'
+    }
     
-    # 1. Удалить все теги, кроме разрешенных
     def remove_tag(match):
+        tag_full = match.group(0)
         tag_name = match.group(2).lower()
+        
+        # Если это ссылка <a href="...">, оставляем как есть
+        if tag_name == 'a':
+            return tag_full
+            
         if tag_name in allowed_tags:
-            return match.group(0)
-        return ''
+            return tag_full
+        
+        return '' # Удаляем запрещенный тег, но оставляем контент
     
-    # Удаляем открывающие и закрывающие теги
-    text = re.sub(r'<(/?)"?([^>\s"]+)[^>]*>', remove_tag, text)
+    # 3. Удаляем все остальные теги, кроме разрешенных
+    text = re.sub(r'<(/?)\"?([^>\\s\"]+)[^>]*>', remove_tag, text)
     
-    # 2. Заменяем нумерованные списки на обычный текст
-    lines = text.split('\n')
-    cleaned_lines = []
+    # 4. Чистим множественные переносы строк
+    lines = [line.strip() for line in text.split('\n')]
+    # Фильтруем пустые строки, но оставляем одиночные разделители
+    clean_text = '\n'.join([l for l in lines if l])
     
-    for line in lines:
-        # Заменяем <ol> и <ul> на пустую строку
-        if re.match(r'\s*</?[ou]l>', line):
-            continue
-        # Заменяем <li> на • (буллит)
-        line = re.sub(r'\s*<li>\s*', '  • ', line)
-        line = re.sub(r'\s*</li>\s*', '', line)
-        # Заменяем нумерацию "1." на "1."
-        cleaned_lines.append(line)
-    
-    # 3. Удаляем множественные пустые строки
-    text = '\n'.join(cleaned_lines)
-    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
-    
-    return text.strip()
+    return clean_text.strip()
 
 
 async def _generate_ai_contextual_analysis(
@@ -346,7 +380,7 @@ async def _generate_ai_contextual_analysis(
     1. КЛЮЧЕВЫЕ УРОВНИ: (2 уровня)
     2. ФАЗА РЫНКА: (1 предложение)
     3. ДЕЙСТВИЯ MM: (1 предложение по funding/OI и ликвидности)
-    4. СИГНАЛ: (направление, вход, TP1, TP2, TP3, SL из данных выше)
+    4. КОНТЕКСТ СИГНАЛА: Объясни, насколько математический сигнал {direction} с входом {entry} согласуется с текущей фазой рынка. НЕ давай свои цены входа/SL/TP - используй только предоставленные данные.
 
     ТОЛЬКО HTML, БЕЗ Markdown. Кратко, по делу.
 
@@ -651,8 +685,11 @@ def format_signal_html(signal: dict) -> str:
     mm_verdict = signal.get("mm_verdict", [])
     filtered_verdict = []
     for line in mm_verdict:
-        # Пропускаем строку с "• <b>Phase:</b>" - она уже выведена в mm_phase
-        if not line.strip().startswith("• <b>Phase:</b>"):
+        line_stripped = line.strip()
+        if (not line_stripped.startswith("• <b>Phase:</b>") and 
+            not line_stripped.startswith("Phase:") and
+            "Accumulation signals:" not in line_stripped and
+            "Distribution signals:" not in line_stripped):
             filtered_verdict.append(line)
     
     mm_text = "\n".join(filtered_verdict) if filtered_verdict else "• Нет дополнительных сигналов"
@@ -697,11 +734,11 @@ def format_signal_html(signal: dict) -> str:
 🛡️ Kevlar: {'ПРОЙДЕН ✅' if signal.get('kevlar_passed') else 'БЛОКИРОВАН ❌'}
 
 {side_emoji}
-Вход:     <code>${signal['entry']:,.2f}</code>
-Стоп:     🔴 <code>${signal['sl']:,.2f}</code>
-TP1:      🟢 <code>${signal['tp1']:,.2f}</code> ({rrr_tp1:.2f}x)
-TP2:      🟢 <code>${signal['tp2']:,.2f}</code> ({rrr_tp2:.2f}x)
-TP3:      🟢 <code>${signal['tp3']:,.2f}</code> ({rrr_tp3:.2f}x)
+Вход:     <code>{_format_price(signal['entry'])}</code>
+Стоп:     🔴 <code>{_format_price(signal['sl'])}</code>
+TP1:      🟢 <code>{_format_price(signal['tp1'])}</code> ({rrr_tp1:.2f}x)
+TP2:      🟢 <code>{_format_price(signal['tp2'])}</code> ({rrr_tp2:.2f}x)
+TP3:      🟢 <code>{_format_price(signal['tp3'])}</code> ({rrr_tp3:.2f}x)
 RRR (TP2): {signal['rrr']:.2f}
 
 ─────────────────────────

@@ -206,6 +206,15 @@ def _detect_liquidity_hunts(
     # ФИЛЬТР: Только ближайшие уровни (5%)
     relevant_supports = [s for s in supports[:2] if abs(s['price'] - price) / price < 0.05]
     
+    # ===== FORMATTER HELPER =====
+    def _fmt_price_for_liq(p: float) -> str:
+        if p < 1:
+            return f"${p:.4f}"
+        elif p < 100:
+            return f"${p:.2f}"
+        else:
+            return f"${p:,.0f}"
+
     for i, support in enumerate(relevant_supports):
         # РЕАЛЬНЫЕ стопы: -3% и -5%
         stop_hunt_zone = support['price'] * 0.97  # -3%
@@ -213,8 +222,8 @@ def _detect_liquidity_hunts(
         
         verdict.append(
             f"  🩸 Стоп-лоссы ЛОНГИСТОВ: "
-            f"${stop_hunt_zone_2:,.0f}-${stop_hunt_zone:,.0f} "
-            f"(под {support['price']:,.0f})"
+            f"{_fmt_price_for_liq(stop_hunt_zone_2)}-{_fmt_price_for_liq(stop_hunt_zone)} "
+            f"(под {_fmt_price_for_liq(support['price'])})"
         )
         liquidity_zones.extend([stop_hunt_zone, stop_hunt_zone_2])
     
@@ -228,8 +237,8 @@ def _detect_liquidity_hunts(
         
         verdict.append(
             f"  🩸 Стоп-лоссы ШОРТИСТОВ: "
-            f"${resistance['price']:,.0f}-${stop_hunt_zone_2:,.0f} "
-            f"(над {resistance['price']:,.0f})"
+            f"{_fmt_price_for_liq(resistance['price'])}-{_fmt_price_for_liq(stop_hunt_zone_2)} "
+            f"(над {_fmt_price_for_liq(resistance['price'])})"
         )
         liquidity_zones.extend([stop_hunt_zone, stop_hunt_zone_2])
     
@@ -237,7 +246,7 @@ def _detect_liquidity_hunts(
     if len(liquidity_zones) >= 2:
         verdict.append(
             f"  🎯 Кластер ликвидности: "
-            f"${min(liquidity_zones):,.0f}-${max(liquidity_zones):,.0f}"
+            f"{_fmt_price_for_liq(min(liquidity_zones))}-{_fmt_price_for_liq(max(liquidity_zones))}"
         )
     
     # ===== IMMINENT HUNT WARNING =====
@@ -247,7 +256,7 @@ def _detect_liquidity_hunts(
             hunt_target = supports[0]['price'] * 0.95
             verdict.append(
                 f"  ⚠️ Вероятная охота: MM может сходить к "
-                f"${hunt_target:,.0f} за стопами перед разворотом"
+                f"{_fmt_price_for_liq(hunt_target)} за стопами перед разворотом"
             )
     
     if resistances:
@@ -256,7 +265,7 @@ def _detect_liquidity_hunts(
             hunt_target = resistances[0]['price'] * 1.05
             verdict.append(
                 f"  ⚠️ Вероятная охота: MM может сходить к "
-                f"${hunt_target:,.0f} за стопами перед откатом"
+                f"{_fmt_price_for_liq(hunt_target)} за стопами перед откатом"
             )
     
     return verdict
@@ -411,7 +420,10 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         funding_raw = indicators.get('funding', '0%')
         funding = 0.0
         if isinstance(funding_raw, str):
+            is_pct = '%' in funding_raw
             funding = float(funding_raw.replace('%', '').replace('+', ''))
+            if is_pct:
+                funding /= 100.0
         else:
             funding = float(funding_raw)
             
@@ -486,8 +498,21 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
              # Fallback if specific keys missing but string raw exists?
              pass
 
-        supports = _parse_levels(support_str, price)
-        resistances = _parse_levels(resistance_str, price)
+        if isinstance(support_str, list):
+             supports = support_str
+             for s in supports:
+                 if 'distance' not in s:
+                     s['distance'] = abs(price - s['price'])
+        else:
+             supports = _parse_levels(support_str, price)
+             
+        if isinstance(resistance_str, list):
+             resistances = resistance_str
+             for r in resistances:
+                 if 'distance' not in r:
+                     r['distance'] = abs(price - r['price'])
+        else:
+             resistances = _parse_levels(resistance_str, price)
         
         # ... (Rest of parsing logic) ...
         
@@ -498,26 +523,49 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         
         liquidity_lines = _detect_liquidity_hunts(price, atr_value, supports, resistances)
         
-        # ============ STEP 5: AI DECISION MAKING ============
+        # ============ STEP 5: AI DECISION MAKING (NEW P0 LOGIC) ============
         direction = "WAIT"
         entry_level = 0.0
-        
-        # ... (Decision Logic) ...
-        # Simplified: Use P-Score and levels to find best setup
-        
-        # ... logic as before ...
-        
-        # Re-implement simplified decision for brevity/robustness based on p_score
-        strong_supports = [l for l in supports if l['score'] >= 1.0] # 1.0 is Medium+
-        strong_resists = [l for l in resistances if l['score'] >= 1.0]
-        
-        if p_score >= 35:
-             if strong_supports and price < strong_supports[0]['price'] * 1.01:
-                 direction = "LONG"
-                 entry_level = strong_supports[0]['price']
-             elif strong_resists and price > strong_resists[0]['price'] * 0.99:
-                 direction = "SHORT"
-                 entry_level = strong_resists[0]['price']
+
+        # Определяем сильные уровни (Score >= 1.0)
+        strong_supports = [l for l in supports if l.get('score', 0) >= 1.0]
+        strong_resistances = [l for l in resistances if l.get('score', 0) >= 1.0]
+
+        # Приоритет: ищем ближайший сильный уровень в пределах 3% от текущей цены
+        max_entry_distance = 0.03  # 3%
+
+        # Проверяем поддержки (LONG)
+        if strong_supports:
+            best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
+            dist = abs(price - best_support['price']) / price
+            
+            if dist <= max_entry_distance:
+                direction = "LONG"
+                entry_level = best_support['price']
+
+        # Проверяем сопротивления (SHORT) только если не нашли лонг
+        if direction == "WAIT" and strong_resistances:
+            best_resist = min(strong_resistances, key=lambda x: abs(x['price'] - price))
+            dist = abs(price - best_resist['price']) / price
+            
+            if dist <= max_entry_distance:
+                direction = "SHORT"
+                entry_level = best_resist['price']
+
+        # Fallback: если P-Score высокий (>50) но нет сильных уровней рядом, 
+        # берем ближайший средний уровень в пределах 5%
+        if direction == "WAIT" and p_score >= 50:
+            all_levels = supports + resistances
+            valid_levels = [l for l in all_levels if l.get('score', -100) > -2.0]  # Не ghost levels
+            
+            if valid_levels:
+                nearest = min(valid_levels, key=lambda x: abs(x['price'] - price))
+                dist = abs(nearest['price'] - price) / price
+                
+                if dist <= 0.05:  # 5% допуск
+                    is_support = nearest['price'] < price
+                    direction = "LONG" if is_support else "SHORT"
+                    entry_level = nearest['price']
         
         # ============ STEP 6: CALCULATE ORDERS ============
         order = None
@@ -528,7 +576,9 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                 zone_half=atr_value * Config.ZONE_WIDTH_MULT,
                 atr=atr_value,
                 capital=1000.0,
-                risk_pct=1.0
+                risk_pct=1.0,
+                funding_rate=funding,          # P0 FIX: Funding impact
+                estimated_hold_hours=24.0      # Standard swing
             )
             
             if order and order.reason_blocked:
@@ -597,11 +647,12 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             "symbol": ticker,
             "side": direction.lower(),
             "entry": entry_level,
-            "sl": order.stop_loss,
-            "tp1": order.tp1,
+            "sl": order.stop, # FIXED: was order.stop_loss
+            "tp1": order.tp1, # FIXED: was order.tp1 (correct)
             "tp2": order.tp2,
             "tp3": order.tp3,
-            "rrr": order.rrr_tp2,
+            "rrr": order.rrr,
+            "size": order.position_size, # FIXED: size
             "p_score": p_score,
             "kevlar_passed": True,
             "kevlar_reason": "Passed",

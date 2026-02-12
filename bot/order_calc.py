@@ -37,7 +37,9 @@ def build_order_plan(
     atr: float,
     capital: float = Config.DEFAULT_CAPITAL,
     risk_pct: float = Config.DEFAULT_RISK_PCT,
-    lot_step: Optional[float] = None
+    lot_step: Optional[float] = None,
+    funding_rate: Optional[float] = None,  # NEW PARAM
+    estimated_hold_hours: float = 24.0      # NEW PARAM
 ) -> OrderPlan:
     """
     Builds a strict order plan based on P1 specs.
@@ -50,6 +52,8 @@ def build_order_plan(
         capital: Account equity to base risk on (default from Config)
         risk_pct: Percentage risk (1.0 = 1%) (default from Config)
         lot_step: Optional step size for rounding (e.g. 0.001 for BTC)
+        funding_rate: Current 8h funding rate (e.g. 0.0001 for 0.01%)
+        estimated_hold_hours: Expected trade duration for funding calc
         
     Returns:
         OrderPlan object. If reason_blocked is set, discard trade.
@@ -105,7 +109,28 @@ def build_order_plan(
     reward_dist = abs(tp2 - entry_price)
     rrr_tp2 = reward_dist / stop_dist
     
-    # 7. Mandatory Sanity Gate
+    # 7. Funding Rate Adjustment (P0 FIX)
+    if funding_rate is not None and funding_rate != 0:
+        # Фандинг каждые 8 часов на Binance
+        funding_periods = estimated_hold_hours / 8
+        funding_cost_pct = abs(funding_rate) * funding_periods
+        
+        # Если шортуем при положительном фандинге или лонгуем при отрицательном - это плюс
+        # Если наоборот - минус
+        funding_pnl_impact = 0.0
+        if side == "LONG" and funding_rate < 0:
+            funding_pnl_impact = -funding_cost_pct  # Получаем фандинг (отрицательная стоимость = доход)
+        elif side == "SHORT" and funding_rate > 0:
+            funding_pnl_impact = -funding_cost_pct  # Получаем фандинг
+        else:
+            funding_pnl_impact = funding_cost_pct   # Платим фандинг
+        
+        # Пока что просто логируем, не меняем логику блокировки, но добавляем предупреждение
+        if funding_pnl_impact > 0.005:  # Если платим >0.5% за время удержания
+            if rrr_tp2 < 1.3:  # Повышаем требования к RRR при дорогом фандинге
+                return _blocked_plan(f"High funding cost ({funding_pnl_impact*100:.2f}%) with low RRR {rrr_tp2:.2f}")
+
+    # 8. Mandatory Sanity Gate
     if rrr_tp2 < 1.10:  # Can be moved to Config later
         return _blocked_plan(f"RRR {rrr_tp2:.2f} is below Min 1.10")
 

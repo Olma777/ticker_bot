@@ -130,6 +130,22 @@ def check_safety_v2(
                     passed=False,
                     blocked_by=f"K2_NO_BRAKES (Falling Knife: {momentum*100:.1f}%)"
                 )
+
+    # ============ ФИЛЬТР 2B: SHORT SQUEEZE PROTECTION (K2_SHORT) ============
+    # Зеркальный фильтр к K2_NO_BRAKES для шортовых позиций
+    if "RESISTANCE" in event_type:
+        if not ctx.candles or len(ctx.candles) < 5:
+            pass  # Пропускаем если нет данных
+        else:
+            current_close = ctx.candles[-1].close
+            prev_close_5 = ctx.candles[-5].close
+            
+            momentum = (current_close / prev_close_5) - 1
+            if momentum > 0.05:  # +5% за 5 свечей - риск squeeze
+                return KevlarResult(
+                    passed=False,
+                    blocked_by=f"K2_SHORT_SQUEEZE (Momentum: +{momentum*100:.1f}%)"
+                )
     
     # ============ ФИЛЬТР 3: RSI PANIC GUARD ============
     # RSI Panic Guard — защита от входа на панике
