@@ -245,27 +245,37 @@ async def cmd_sniper(message: Message) -> None:
         signal = await get_sniper_analysis(ticker, "ru")
         await loading_msg.delete()
         
-        status = signal.get("status", "OK")
-        
-        # 1. BLOCKED - Strict Safety
-        if status == "BLOCKED":
+        # 1. Validation Logic (Safety Net)
+        if signal.get("status") != "OK":
             reason = signal.get("reason", "Unknown")
-            # If blocked by Kevlar, show details
-            kevlar_passed = signal.get("kevlar_passed", True)
+            status = signal.get("status", "ERROR")
             
-            text = (
-                f"❌ <b>Сигнал для {ticker} заблокирован</b>\n"
-                f"🛑 Причина: {reason}\n"
-                f"🛡 Kevlar: {'PASSED' if kevlar_passed else 'FAILED ❌'}"
-            )
+             # If blocked by Kevlar, show details
+            if status == "BLOCKED":
+                kevlar_passed = signal.get("kevlar_passed", True)
+                text = (
+                    f"❌ <b>Сигнал для {ticker} заблокирован</b>\n"
+                    f"🛑 Причина: {reason}\n"
+                    f"🛡 Kevlar: {'PASSED' if kevlar_passed else 'FAILED ❌'}"
+                )
+            else:
+                text = f"⚠️ Ошибка данных для {ticker}\nПроверьте биржу или тикер.\nДетали: {reason}"
+                
             await message.answer(text, parse_mode=ParseMode.HTML)
             return
 
-        # 2. ERROR - Data Issues
-        if status == "ERROR":
-            reason = signal.get("reason", "Unknown Error")
-            await message.answer(f"⚠️ Ошибка данных для {ticker}\nПроверьте биржу или тикер.\nДетали: {reason}")
-            return
+        if signal.get("type") != "TRADE":
+             await message.answer(f"⛔ Нет торгового сигнала: {signal.get('reason', 'Wait')}")
+             return
+             
+        # 2. Field Integrity Check
+        required_fields = ["entry", "sl", "tp1", "tp2", "tp3", "rrr"]
+        # Allow 0 for some fields if logic permits, but None is bad. Order calc ensures floats.
+        missing = [f for f in required_fields if f not in signal or signal[f] is None]
+        
+        if missing:
+             await message.answer(f"⚠️ Ошибка расчета ордера. Отсутствуют поля: {', '.join(missing)}")
+             return
             
         # 3. SUCCESS - Format Trade
         try:
