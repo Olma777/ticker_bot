@@ -117,30 +117,40 @@ async def get_crypto_price(ticker: str) -> tuple[Optional[dict], Optional[bool]]
 # --- Tiered Cache Integration ---
 cache = TieredCache()
 
+class InvalidPriceError(Exception):
+    pass
+
 async def _original_fetch_logic(symbol: str) -> float:
     sym = symbol.upper().replace("USDT", "").replace("USD", "")
     headers = {"User-Agent": "Mozilla/5.0"}
+    price_val = 0.0
+    
     async with aiohttp.ClientSession(headers=headers) as session:
         try:
             res = await _fetch_binance_futures_price(sym, session)
             if res and res.get("price"):
                 price_val = float(res["price"])
-                # LEGACY: logging.info(f"Price for {symbol}: {price_val}")
                 logger.info("price_fetched", symbol=symbol, price=price_val, provider="binance_futures", latency_ms=None, tokens_used=None)
-                return price_val
         except Exception as e:
-            # LEGACY: logger.debug(f"Binance Futures fetch failed: {e}")
             logger.error("binance_fetch_failed", symbol=symbol, exc_info=True)
-    try:
-        res = await _fetch_ccxt_price(sym)
-        if res and res.get("price"):
-            price_val = float(res["price"])
-            logger.info("price_fetched", symbol=symbol, price=price_val, provider="ccxt", latency_ms=None, tokens_used=None)
-            return price_val
-    except Exception as e:
-        # LEGACY: logger.error(f"CCXT fallback failed for {symbol}: {e}")
-        logger.error("ccxt_fetch_failed", symbol=symbol, exc_info=True)
-    raise Exception(f"Price fetch failed for {symbol}")
+            
+    if price_val == 0.0:
+        try:
+            res = await _fetch_ccxt_price(sym)
+            if res and res.get("price"):
+                price_val = float(res["price"])
+                logger.info("price_fetched", symbol=symbol, price=price_val, provider="ccxt", latency_ms=None, tokens_used=None)
+        except Exception as e:
+            logger.error("ccxt_fetch_failed", symbol=symbol, exc_info=True)
+
+    if price_val == 0.0:
+        raise Exception(f"Price fetch failed for {symbol}")
+        
+    # SANITY CHECK: Anti-Hallucination
+    if price_val <= 0 or price_val > 1_000_000:
+        raise InvalidPriceError(f"Invalid price detected: {price_val} (Check API or Symbol)")
+        
+    return price_val
 
 async def get_price(symbol: str) -> float:
     return await cache.get_or_set(

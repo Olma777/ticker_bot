@@ -13,6 +13,7 @@ from typing import Optional, Any, List
 from dataclasses import dataclass
 
 from bot.config import TRADING, EXCHANGE_OPTIONS, Config
+from bot.models.market_context import Candle
 
 logger = logging.getLogger(__name__)
 
@@ -429,7 +430,8 @@ def get_intraday_strategy(
         "risk_pct": round((order_plan.stop_dist / order_plan.entry * 100) if order_plan.entry > 0 else 0, 2),
         "position_size": order_plan.size_units,
         "risk_amount": round(order_plan.risk_amount, 2),
-        "rrr": round(order_plan.rrr_tp2, 1)
+        "rrr": round(order_plan.rrr_tp2, 1),
+        "side": side
     }
 
 
@@ -506,7 +508,17 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             "vwap": f"${vwap_24h:.4f}",
             "p_score": p_score,
             "p_score_details": p_score_details,
-            "strategy": strat
+            "strategy": strat,
+            "candles": [
+                Candle(
+                    timestamp=int(row.time),
+                    open=row.open,
+                    high=row.high,
+                    low=row.low,
+                    close=row.close,
+                    volume=row.volume
+                ) for row in df.tail(20).itertuples(index=False)
+            ]
         }
     finally:
         await exchange.close()

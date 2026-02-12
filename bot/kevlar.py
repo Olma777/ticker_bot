@@ -99,6 +99,12 @@ def check_safety_v2(
     # ============ ФИЛЬТР 0: ЦЕЛОСТНОСТЬ ДАННЫХ ============
     if atr == 0 or current_price == 0:
         return KevlarResult(passed=False, blocked_by="K0_INVALID_MARKET_DATA")
+
+    # VALIDATION: Check for sufficient data
+    if not ctx.candles or len(ctx.candles) < 5:
+        return KevlarResult(passed=False, blocked_by="K0_INSUFFICIENT_CANDLES_DATA")
+    if ctx.rsi is None:
+        return KevlarResult(passed=False, blocked_by="K0_NO_RSI_DATA")
     
     # ============ ФИЛЬТР 1: ДИСТАНЦИЯ ДО УРОВНЯ ============
     dist_pct = abs(current_price - level_price) / current_price * 100
@@ -106,32 +112,44 @@ def check_safety_v2(
         return KevlarResult(passed=False, blocked_by=f"K1_LEVEL_TOO_FAR ({dist_pct:.1f}% > {Config.MAX_DIST_PCT}%)")
     
     # ============ ФИЛЬТР 2: MOMENTUM - NO BRAKES ============
-    # NOTE: Candle data not available in DTOContext - filter disabled for v2
-    # This maintains forward compatibility while ensuring core safety
+    # Momentum Protection — защита от "падающего ножа"
+    # Logic: Close[0] / Close[5] - 1 < -3%
+    # Uses recently added ctx.candles
+    if "SUPPORT" in event_type:
+        # Check if we have enough candles (already checked above)
+        current_close = ctx.candles[-1].close
+        prev_close_5 = ctx.candles[-5].close
+        
+        momentum = (current_close / prev_close_5) - 1
+        if momentum < -0.03:  # Падение >3% за 5 свечей
+             return KevlarResult(
+                passed=False,
+                blocked_by=f"K2_NO_BRAKES (Falling Knife: {momentum*100:.1f}%)"
+            )
     
     # ============ ФИЛЬТР 3: RSI PANIC GUARD ============
-    # NOTE: RSI data not available in DTOContext - filter disabled for v2
-    # RSI-based filtering requires additional market data integration
+    # RSI Panic Guard — защита от входа на панике
+    if ctx.rsi < 30 or ctx.rsi > 70:
+        return KevlarResult(
+            passed=False,
+            blocked_by=f"K3_RSI_PANIC (RSI {ctx.rsi:.1f} is extreme)"
+        )
     
     # ============ ФИЛЬТР 4: SENTIMENT TRAP ============
     # Funding rate based sentiment filtering
     if ctx.funding_rate is not None:
         if "SUPPORT" in event_type:
-            if ctx.funding_rate > Config.FUNDING_THRESHOLD and current_price < ctx.vwap:
+            if ctx.funding_rate > Config.FUNDING_THRESHOLD and current_price < (ctx.vwap or current_price): # Fallback to price if VWAP 0
                 return KevlarResult(
                     passed=False,
                     blocked_by=f"K4_SENTIMENT_LONG_TRAP (F: {ctx.funding_rate*100:.3f}%, P < VWAP)"
                 )
         if "RESISTANCE" in event_type:
-            if ctx.funding_rate < -Config.FUNDING_THRESHOLD and current_price > ctx.vwap:
+            if ctx.funding_rate < -Config.FUNDING_THRESHOLD and current_price > (ctx.vwap or current_price):
                 return KevlarResult(
                     passed=False,
                     blocked_by=f"K4_SENTIMENT_SHORT_TRAP (F: {ctx.funding_rate*100:.3f}%, P > VWAP)"
                 )
 
-    # ============ ФИЛЬТР 4: SENTIMENT TRAP ============
-    # Note: Sentiment context not available in DTOContext, skipping K4 for v2
-    # This maintains compatibility while ensuring core safety filters work
-    
     # Все фильтры пройдены
     return KevlarResult(passed=True, blocked_by=None)

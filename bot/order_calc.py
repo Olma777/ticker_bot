@@ -58,33 +58,23 @@ def build_order_plan(
     # 1. Entry (TOUCH_LIMIT: entry = level)
     entry_price = level
     
-    # 2. Stop Loss (Zone Boundary ± Buffer)
-    # FIXED: Use Config.SL_ATR_MULT (1.5) instead of hardcoded 0.25
-    sl_buffer = Config.SL_ATR_MULT * atr
+    # 2. Stop Loss & Take Profits (ATR Based - User Spec 2026-02-12)
+    sl_dist = Config.SL_ATR_MULT * atr
+    tp1_dist = Config.TP1_ATR_MULT * atr
+    tp2_dist = Config.TP2_ATR_MULT * atr
+    tp3_dist = Config.TP3_ATR_MULT * atr
     
     if side == "LONG":
-        zone_bot = level - zone_half
-        sl_price = zone_bot - sl_buffer
-        
-        # 3. Take Profits (Risk Based R-Multiples)
-        # RRR Validation Fix: TP must be relative to risk to ensure viable RRR.
-        # We target: TP1=1R, TP2=2R, TP3=3R
-        risk_dist = abs(entry_price - sl_price)
-        
-        tp1 = entry_price + (1.0 * risk_dist)
-        tp2 = entry_price + (2.0 * risk_dist)
-        tp3 = entry_price + (3.0 * risk_dist)
+        sl_price = entry_price - sl_dist
+        tp1 = entry_price + tp1_dist
+        tp2 = entry_price + tp2_dist
+        tp3 = entry_price + tp3_dist
         
     else: # SHORT
-        zone_top = level + zone_half
-        sl_price = zone_top + sl_buffer
-        
-        # 3. Take Profits (Risk Based R-Multiples)
-        risk_dist = abs(entry_price - sl_price)
-        
-        tp1 = entry_price - (1.0 * risk_dist)
-        tp2 = entry_price - (2.0 * risk_dist)
-        tp3 = entry_price - (3.0 * risk_dist)
+        sl_price = entry_price + sl_dist
+        tp1 = entry_price - tp1_dist
+        tp2 = entry_price - tp2_dist
+        tp3 = entry_price - tp3_dist
 
     # 4. Stop Distance & Validation
     stop_dist = abs(entry_price - sl_price)

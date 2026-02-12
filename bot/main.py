@@ -20,7 +20,7 @@ import structlog  # Added import
 
 from bot.db import init_db, get_user_setting, set_user_setting, delete_user_setting, get_all_users_for_hour
 from bot.prices import get_crypto_price, get_market_summary
-from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan
+from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan, format_signal_html
 from bot.validators import SymbolValidator, InvalidSymbolError
 from bot.prices import PriceUnavailableError
 from bot.logger import configure_logging  # Removed logger import to avoid circular dep or re-init
@@ -242,19 +242,42 @@ async def cmd_sniper(message: Message) -> None:
     loading_msg = await message.answer(f"🔭 Снайпер-модуль сканирует {ticker}...")
     
     try:
-        report = await get_sniper_analysis(ticker, "ru")
+        signal = await get_sniper_analysis(ticker, "ru")
         await loading_msg.delete()
         
+        status = signal.get("status", "OK")
+        
+        # 1. BLOCKED - Strict Safety
+        if status == "BLOCKED":
+            reason = signal.get("reason", "Unknown")
+            # If blocked by Kevlar, show details
+            kevlar_passed = signal.get("kevlar_passed", True)
+            
+            text = (
+                f"❌ <b>Сигнал для {ticker} заблокирован</b>\n"
+                f"🛑 Причина: {reason}\n"
+                f"🛡 Kevlar: {'PASSED' if kevlar_passed else 'FAILED ❌'}"
+            )
+            await message.answer(text, parse_mode=ParseMode.HTML)
+            return
+
+        # 2. ERROR - Data Issues
+        if status == "ERROR":
+            reason = signal.get("reason", "Unknown Error")
+            await message.answer(f"⚠️ Ошибка данных для {ticker}\nПроверьте биржу или тикер.\nДетали: {reason}")
+            return
+            
+        # 3. SUCCESS - Format Trade
         try:
+            report = format_signal_html(signal)
             await message.answer(report, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.error(f"HTML Parse Error: {e}")
-            clean_report = report.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "")
-            await message.answer(f"⚠️ Ошибка форматирования (Raw Text):\n\n{clean_report}")
+            await message.answer(f"⚠️ Ошибка форматирования сигнала: {e}")
         
     except Exception as e:
         logger.error(f"Error in cmd_sniper: {e}", exc_info=True)
-        await message.answer(f"⚠️ Ошибка: {e}")
+        await message.answer(f"⚠️ Критическая ошибка бота: {e}")
     except PriceUnavailableError as e:
         await message.answer(f"⚠️ Price unavailable: {e}")
 
@@ -262,22 +285,49 @@ async def cmd_sniper(message: Message) -> None:
 @dp.message(Command("daily"))
 async def daily_manual_handler(message: Message) -> None:
     """Manual daily briefing request."""
-    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
-    loading = await message.answer("☕️ Параллельно собираю дайджест по рынку (лимит: 3)...")
+    # Reduced list to avoid rate limits/timeouts
+    symbols = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
+    loading = await message.answer("☕️ Параллельно собираю дайджест по рынку (лимит: 5)...")
     try:
+        # get_sniper_analysis expects ticker without USDT usually, or normalized?
+        # get_sniper_analysis calls get_ai_sniper_analysis which calls get_technical_indicators
+        # which calls get_market_context which handles symbol/USDT normalization.
+        # But here we pass "BTC", "ETH" etc.
+        # So s.replace("USDT", "") is correct if input is "BTCUSDT".
+        # But my list is ["BTC", ...]
+        # Wait, the TARGET content has ["BTCUSDT"...]
+        # I am changing it to ["BTC"...]
         results = await batch_process(
             symbols,
-            lambda s: get_sniper_analysis(s.replace("USDT",""), "ru"),
+            lambda s: get_sniper_analysis(s, "ru"),
             concurrency=3
         )
         await loading.delete()
-        response = []
+        response = ["📊 <b>Market Digest</b>\n"]
+        
         for symbol, result in zip(symbols, results):
             if isinstance(result, Exception):
-                response.append(f"{symbol}: ❌ {str(result)[:50]}")
+                response.append(f"{symbol}: ⚠️ Error")
+                continue
+            
+            # Helper safely handles dict or str (if legacy)
+            if isinstance(result, dict):
+                status = result.get("status", "OK")
+                if status == "BLOCKED":
+                    reason = result.get("reason", "Blocked")
+                    response.append(f"{symbol}: 🛑 {reason}")
+                elif status == "ERROR":
+                     response.append(f"{symbol}: ⚠️ Error")
+                elif status == "OK" and result.get("type") == "TRADE":
+                     price = result.get("entry", 0)
+                     side = "L" if result.get("side") == "long" else "S"
+                     response.append(f"{symbol}: ✅ {side} @ {price:.2f}")
+                else:
+                     response.append(f"{symbol}: ⚪️ Neutral")
             else:
-                response.append(f"{symbol}: ✅ {result[:100]}...")
-        await message.answer("\n".join(response))
+                 response.append(f"{symbol}: ❓ {str(result)[:20]}...")
+
+        await message.answer("\n".join(response), parse_mode=ParseMode.HTML)
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {e}")
 

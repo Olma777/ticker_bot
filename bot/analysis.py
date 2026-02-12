@@ -254,19 +254,15 @@ except ImportError as e:
     AI_ANALYST_AVAILABLE = False
     logger.error(f"❌ AI Analyst MISSING - BOT WILL FAIL: {e}")
 
-async def get_sniper_analysis(ticker: str, language: str = "ru") -> str:
-    """FORCED AI ANALYST - NO FALLBACK"""
+async def get_sniper_analysis(ticker: str, language: str = "ru") -> dict:
+    """FORCED AI ANALYST - NO FALLBACK - Returns Dict"""
     
     if not AI_ANALYST_AVAILABLE:
-        return f"""❌ <b>SYSTEM ERROR</b>
-        
-AI Analyst module is missing.
-File: bot/ai_analyst.py
-Command: /sniper {ticker}
-Time: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
-
-Please contact support.
-"""
+        return {
+            "status": "ERROR", 
+            "reason": "AI Analyst module is missing",
+            "symbol": ticker
+        }
     
     try:
         # LEGACY: logger.info(f"🎯 AI Analyst processing: {ticker}")
@@ -275,32 +271,15 @@ Please contact support.
         latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
         logger.info("llm_response", symbol=ticker, price=None, latency_ms=int(latency), tokens_used=None)
         
-        # Handle WAIT signal
-        if signal.get("type") == "WAIT":
-            return f"""
-🚫 <b>{signal.get('symbol', ticker)} | WAIT</b>
-💰 ${signal.get('entry', 0):,.2f}
-────────────────
-🛑 <b>BLOCKED:</b> {signal.get('kevlar_reason', 'Unknown reason')}
-🎯 P-Score: {signal.get('p_score', 0)}/100
-🛡️ Kevlar: {'PASSED' if signal.get('kevlar_passed') else 'FAILED'}
-
-Логика:
-• {signal.get('logic_line1', 'N/A')}
-"""
-
-        # Handle TRADE signal
-        validate_signal(signal)
-        return format_signal_html(signal)
+        return signal
             
     except Exception as e:
         logger.error("llm_response_error", symbol=ticker, exc_info=True)
-        return f"""❌ <b>AI ANALYST CRASHED</b>
-        
-Error: {str(e)[:200]}
-
-{ticker} | {datetime.now(timezone.utc).strftime("%H:%M UTC")}
-"""
+        return {
+            "status": "ERROR",
+            "reason": str(e),
+            "symbol": ticker
+        }
 
 async def _generate_legacy_analysis(ticker: str, strat: dict, indicators: dict) -> str:
     """Generate analysis using legacy OpenAI prompt (backup)"""

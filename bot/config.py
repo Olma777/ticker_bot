@@ -123,10 +123,15 @@ class Config:
     MAX_DIST_PCT = 30.0          # <-- ADDED HOTFIX
     
     # --- RISK & LOGIC (NEW: SINGLE SOURCE OF TRUTH) ---
+    # --- RISK & LOGIC (NEW: SINGLE SOURCE OF TRUTH) ---
     P_SCORE_THRESHOLD = 35
     FUNDING_THRESHOLD = 0.0003
-    SL_ATR_MULT = 1.5           # Fixed: Stop Loss multiplier (was inconsistent: 0.25 vs 1.5)
-    TP_ATR_MULT = 3.0           # Fallback Take-Profit multiplier when no target level
+    
+    # Strict ATR Multipliers (User Requested 2026-02-12)
+    SL_ATR_MULT = 1.0           # Precision Stop
+    TP1_ATR_MULT = 0.75         # Quick Profit
+    TP2_ATR_MULT = 1.25         # Level
+    TP3_ATR_MULT = 2.00         # Runner
     
     # --- P1-LOCKED ---
     ENTRY_MODE = "TOUCH_LIMIT"
