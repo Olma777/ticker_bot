@@ -383,6 +383,13 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         from bot.order_calc import build_order_plan
         from bot.config import Config
         
+        # ============ ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ (HOTFIX) ============
+        direction = "WAIT"
+        entry_level = 0.0
+        order = None
+        ai_analysis = ""
+        # ==========================================================
+        
     # ============ STEP 1: GET INDICATOR DATA ============
         logger.info(f"📊 INDICATOR: Fetching data for {ticker}")
         indicators = await get_technical_indicators(ticker)
@@ -630,6 +637,15 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             ai_analysis = "⚠️ AI-анализ временно недоступен"
 
         # ============ STEP 8: RETURN SUCCESS ============
+        # Гарантируем что order не None перед доступом к order.stop_loss
+        if order is None or direction == "WAIT":
+             return {
+                 "status": "BLOCKED", 
+                 "reason": "Order calculation failed or no setup found", 
+                 "symbol": ticker,
+                 "type": "WAIT"
+             }
+
         mm_block = []
         mm_block.extend(mm_verdict_lines)
         
