@@ -646,13 +646,13 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             "type": "TRADE",
             "symbol": ticker,
             "side": direction.lower(),
-            "entry": entry_level,
-            "sl": order.stop, # FIXED: was order.stop_loss
-            "tp1": order.tp1, # FIXED: was order.tp1 (correct)
+            "entry": order.entry,
+            "stop_loss": order.stop_loss, # Renamed from stop
+            "tp1": order.tp1,
             "tp2": order.tp2,
             "tp3": order.tp3,
-            "rrr": order.rrr,
-            "size": order.position_size, # FIXED: size
+            "position_size": order.size_units,
+            "rrr": order.rrr_tp2,
             "p_score": p_score,
             "kevlar_passed": True,
             "kevlar_reason": "Passed",

@@ -137,7 +137,7 @@ async def test_ape_direction_logic():
                  assert result['status'] == 'OK', f"Status not OK: {result.get('status')} {result.get('reason')}"
                  # Note: get_ai_sniper_analysis returns key 'type' or 'side'?
                  # Original code: "type": direction (LONG/SHORT/WAIT)
-                 assert result['type'] == 'LONG', f"Direction wrong: {result.get('type')}"
+                 assert result['side'] == 'long', f"Direction wrong: {result.get('side')}"
                  assert result['entry'] == 0.98, f"Entry wrong: {result.get('entry')}"
                  
                  print("✅ Direction Logic - Strong Support Priority Passed")
