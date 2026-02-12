@@ -113,19 +113,23 @@ def check_safety_v2(
     
     # ============ ФИЛЬТР 2: MOMENTUM - NO BRAKES ============
     # Momentum Protection — защита от "падающего ножа"
-    # Logic: Close[0] / Close[5] - 1 < -3%
-    # Uses recently added ctx.candles
+    # Logic: Close[0] / Close[5] - 1 < -5% (RELAXED from -3%)
     if "SUPPORT" in event_type:
         # Check if we have enough candles (already checked above)
-        current_close = ctx.candles[-1].close
-        prev_close_5 = ctx.candles[-5].close
-        
-        momentum = (current_close / prev_close_5) - 1
-        if momentum < -0.03:  # Падение >3% за 5 свечей
-             return KevlarResult(
-                passed=False,
-                blocked_by=f"K2_NO_BRAKES (Falling Knife: {momentum*100:.1f}%)"
-            )
+        if not ctx.candles or len(ctx.candles) < 5:
+             # Safety fallback: if no data, do we block? 
+             # No, let's assume safe if data missing, but log warning elsewhere.
+             pass
+        else:
+            current_close = ctx.candles[-1].close
+            prev_close_5 = ctx.candles[-5].close
+            
+            momentum = (current_close / prev_close_5) - 1
+            if momentum < -0.05:  # P0 FIX: RELAXED to -5%
+                 return KevlarResult(
+                    passed=False,
+                    blocked_by=f"K2_NO_BRAKES (Falling Knife: {momentum*100:.1f}%)"
+                )
     
     # ============ ФИЛЬТР 3: RSI PANIC GUARD ============
     # RSI Panic Guard — защита от входа на панике

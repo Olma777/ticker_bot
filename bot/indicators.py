@@ -449,6 +449,60 @@ def get_intraday_strategy(
     }
 
 
+
+async def diagnose_pivot_detection(df: pd.DataFrame) -> None:
+    """Diagnose why pivots are not found."""
+    logger.info("🔍 PIVOT DETECTION DIAGNOSTICS")
+    
+    highs = df['high'].values
+    lows = df['low'].values
+    
+    # HARDCODED CONFIG CHECK
+    left_bars = 4
+    right_bars = 4
+    
+    pivots_high = 0
+    pivots_low = 0
+    
+    for i in range(left_bars, len(df) - right_bars):
+        # Check Pivot High
+        is_ph = True
+        for k in range(1, left_bars + 1):
+            if highs[i] <= highs[i-k]:
+                is_ph = False; break
+        if is_ph:
+            for k in range(1, right_bars + 1):
+                if highs[i] <= highs[i+k]:
+                    is_ph = False; break
+        if is_ph:
+            pivots_high += 1
+            if pivots_high <= 5: # Log first 5 only
+                logger.info(f"   Pivot High at index {i}, price: ${highs[i]:.2f}")
+        
+        # Check Pivot Low
+        is_pl = True
+        for k in range(1, left_bars + 1):
+            if lows[i] >= lows[i-k]:
+                is_pl = False; break
+        if is_pl:
+            for k in range(1, right_bars + 1):
+                if lows[i] >= lows[i+k]:
+                    is_pl = False; break
+        if is_pl:
+            pivots_low += 1
+            if pivots_low <= 5:
+                 logger.info(f"   Pivot Low at index {i}, price: ${lows[i]:.2f}")
+    
+    logger.info(f"✅ Total pivots high: {pivots_high}")
+    logger.info(f"✅ Total pivots low: {pivots_low}")
+    
+    if pivots_high == 0 and pivots_low == 0:
+        logger.error("❌ ZERO PIVOTS DETECTED — Check left_bars/right_bars parameters")
+        logger.error(f"   Current: left_bars={left_bars}, right_bars={right_bars}")
+        logger.error(f"   Data range: {len(df)} candles")
+        logger.error(f"   Price range: ${min(lows):.2f} — ${max(highs):.2f}")
+
+
 async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
     """Get all technical indicators for a ticker (Legacy for /sniper)."""
     exchange = ccxt.binance(EXCHANGE_OPTIONS["binance"])
@@ -457,7 +511,7 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         # P0 FIX: Enforce 30m timeframe strict
         timeframe = "30m"
         
-        logger.info(f"📊 FETCHING {ticker} on TIMEFRAME={timeframe}")
+        logger.info(f"🔍 FETCHING {ticker} 30m data from Binance...")
         
         # Fetch data in parallel
         m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", timeframe, limit=1500)
@@ -469,7 +523,11 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             m30_task, btc_task, funding_task, oi_task
         )
         
-        # === DIAGNOSTICS (P0 FIX) ===
+        # === DIAGNOSTICS FOR DATA INTEGRITY ===
+        logger.info("=" * 60)
+        logger.info(f"📊 DIAGNOSTICS FOR {ticker}")
+        logger.info("=" * 60)
+        
         if df is None:
             logger.error(f"❌ NO DATA: fetch_ohlcv_data returned None for {ticker}")
             return None
@@ -478,18 +536,53 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             logger.error(f"❌ EMPTY DF: DataFrame is empty for {ticker}")
             return None
             
+        logger.info(f"✅ df shape: {df.shape}")
+        
         if len(df) < 100:
             logger.error(f"❌ INSUFFICIENT DATA: Only {len(df)} candles for {ticker}, need ≥100")
             return None
 
         # P0 FIX: Verify Timeframe
-        if len(df) > 1:
+        if len(df) >= 2:
             time_diff = df['time'].iloc[-1] - df['time'].iloc[-2]
-            expected_diff = 30 * 60 * 1000 # 30 mins in ms
-            if time_diff != expected_diff:
-                logger.error(f"❌ WRONG TIMEFRAME! Expected 30m (1800000ms), got {time_diff}ms")
+            time_diff_min = time_diff / 60000
+            logger.info(f"✅ Timeframe: {time_diff_min:.0f} minutes between last 2 candles")
+            if abs(time_diff_min - 30) > 1:
+                logger.error(f"❌ WRONG TIMEFRAME! Expected 30m, got {time_diff_min:.0f}m")
             else:
                  logger.info(f"✅ Timeframe verified: 30m")
+
+        df['atr'] = calculate_atr(df)
+        df['rsi'] = calculate_rsi(df)
+        regime, safety = calculate_global_regime(btc_df)
+        m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
+        
+        # Data Integrity Checks
+        last_price = df['close'].iloc[-1]
+        logger.info(f"✅ Current price: ${last_price:.2f}")
+
+        # Check 5 candles ago for K2_NO_BRAKES
+        if len(df) >= 5:
+            price_5_ago = df['close'].iloc[-5]
+            change_5 = ((last_price / price_5_ago) - 1) * 100
+            logger.info(f"✅ Price 5 candles ago: ${price_5_ago:.2f}")
+            logger.info(f"✅ Change over 5 candles: {change_5:.1f}%")
+            if change_5 < -3.0:
+                logger.warning(f"⚠️ Would trigger K2_NO_BRAKES (Falling Knife: {change_5:.1f}%)")
+
+        # === LEVEL DIAGNOSTICS ===
+        logger.info(f"✅ Supports found: {len(m30_sup)}")
+        logger.info(f"✅ Resistances found: {len(m30_res)}")
+        if m30_sup:
+            logger.info(f"   Top support: ${m30_sup[0]['price']:.2f} (score: {m30_sup[0]['score']:.1f})")
+        if m30_res:
+            logger.info(f"   Top resistance: ${m30_res[0]['price']:.2f} (score: {m30_res[0]['score']:.1f})")
+            
+        if not m30_sup and not m30_res:
+            logger.error("❌ NO LEVELS FOUND — PIVOT DETECTION FAILED")
+            await diagnose_pivot_detection(df)
+        
+        logger.info("=" * 60)
 
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
