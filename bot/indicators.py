@@ -182,9 +182,9 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[d
     levels = []
     
     # 1. Pivot Detection (Pivots High/Low)
-    # Pine: leftBars=10, rightBars=10
-    left_bars = 10
-    right_bars = 10
+    # Pine: leftBars=4, rightBars=4 (FIXED from 10)
+    left_bars = 4
+    right_bars = 4
     
     for i in range(left_bars, len(df) - right_bars):
         # Pivot High
@@ -218,6 +218,10 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[d
                 'age': 0, 'touches': 0, 'score': 0.0, 'atr': atrs[i]
             })
 
+    # ... (rest of process_levels unchanged) ...
+    # Wait, I need to keep the function structure intact. 
+    # I will replace the fetch_ohlcv_data calls and logging in get_technical_indicators too.
+    
     # 2. Filter & Merge
     # Pine: Merge if dist < mergeATR * ATR
     merged_levels = []
@@ -465,7 +469,17 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             m30_task, btc_task, funding_task, oi_task
         )
         
-        if df is None or df.empty:
+        # === DIAGNOSTICS (P0 FIX) ===
+        if df is None:
+            logger.error(f"❌ NO DATA: fetch_ohlcv_data returned None for {ticker}")
+            return None
+        
+        if df.empty:
+            logger.error(f"❌ EMPTY DF: DataFrame is empty for {ticker}")
+            return None
+            
+        if len(df) < 100:
+            logger.error(f"❌ INSUFFICIENT DATA: Only {len(df)} candles for {ticker}, need ≥100")
             return None
 
         # P0 FIX: Verify Timeframe
@@ -474,8 +488,6 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             expected_diff = 30 * 60 * 1000 # 30 mins in ms
             if time_diff != expected_diff:
                 logger.error(f"❌ WRONG TIMEFRAME! Expected 30m (1800000ms), got {time_diff}ms")
-                # We could raise here, but for now let's just error log and maybe correct?
-                # Actually, if we requested "30m" and got wrong data, it's an exchange/ccxt issue.
             else:
                  logger.info(f"✅ Timeframe verified: 30m")
 
@@ -483,6 +495,16 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         df['rsi'] = calculate_rsi(df)
         regime, safety = calculate_global_regime(btc_df)
         m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
+        
+        # === LEVEL DIAGNOSTICS (P0 FIX) ===
+        logger.info(f"📊 LEVELS DETECTED: {len(m30_sup)} supports, {len(m30_res)} resistances")
+        if m30_sup:
+            logger.info(f"   Top support: ${m30_sup[0]['price']:.2f} (score: {m30_sup[0]['score']:.1f})")
+        if m30_res:
+            logger.info(f"   Top resistance: ${m30_res[0]['price']:.2f} (score: {m30_res[0]['score']:.1f})")
+            
+        if not m30_sup and not m30_res:
+            logger.warning("⚠️ NO LEVELS FOUND! Check pivot detection and merge logic.")
         
         current_price = df['close'].iloc[-1]
         
@@ -494,8 +516,6 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         logger.info(f"   Current price: ${current_price:.2f}")
 
         # P1 FIX: Reclassify Levels based on Current Price
-        # (Ghost levels already filtered by process_levels)
-        
         all_levels = m30_sup + m30_res
         
         real_supports = []
@@ -508,9 +528,8 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             elif lvl['price'] > current_price:
                 lvl['type'] = 'RESISTANCE'
                 real_resistances.append(lvl)
-            # Equal price - ignore or keep as is (unlikely float exact match)
         
-        # Sort again just in case
+        # Sort again
         real_supports.sort(key=lambda x: x['score'], reverse=True)
         real_resistances.sort(key=lambda x: x['score'], reverse=True)
         

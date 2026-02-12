@@ -364,8 +364,21 @@ async def cmd_test_post(message: Message) -> None:
 
 # --- MAIN ---
 
+import fcntl
+
 async def main() -> None:
-    """Main entry point."""
+    """Main entry point with single-instance lock."""
+    
+    # === SINGLE INSTANCE LOCK ===
+    lock_file = "/tmp/marketlens-bot.lock"
+    try:
+        fd = os.open(lock_file, os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, BlockingIOError):
+        print("❌ Another instance is already running. Exiting.")
+        sys.exit(1)
+    # ==============================
+
     # configure_logging(json_logs=True)  # Already configured globally
     logger.info("bot_started", version="v3.0")
     # Initialize database
