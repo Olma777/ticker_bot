@@ -371,68 +371,66 @@ def _determine_market_phase(
 
 async def get_ai_sniper_analysis(ticker: str) -> Dict:
     """
-    COMPLETE PIPELINE:
-    1. INDICATOR → Levels, Score, RSI, ATR, VWAP, Funding, OI
-    2. MM BEHAVIOR → Accumulation/Distribution, Liquidity Hunts, Spoofing
-    3. AI DECISION → LONG/SHORT/WAIT based on level strength
-    4. ORDER_CALC → Exact Entry, SL, TP1/2/3, Size, RRR
-    5. OUTPUT → Your professional template with ALL sections
+    COMPLETE PIPELINE с гарантированной инициализацией всех переменных
     """
+    # ============ ИНИЦИАЛИЗАЦИЯ ВСЕХ ПЕРЕМЕННЫХ (ОБЯЗАТЕЛЬНО) ============
+    direction = "WAIT"
+    entry_level = 0.0
+    order = None
+    ai_analysis = ""
+    supports = []
+    resistances = []
+    indicators = None
+    price = 0.0
+    atr_value = 0.0
+    p_score = 0
+    kevlar_res = None
+    ctx = None
+    
     try:
         from bot.indicators import get_technical_indicators
         from bot.order_calc import build_order_plan
         from bot.config import Config
+        from bot.models.market_context import MarketContext
         
-        # ============ ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ (HOTFIX) ============
-        direction = "WAIT"
-        entry_level = 0.0
-        order = None
-        ai_analysis = ""
-        # ==========================================================
-        
-    # ============ STEP 1: GET INDICATOR DATA ============
         logger.info(f"📊 INDICATOR: Fetching data for {ticker}")
+        
+        # ============ STEP 1: GET INDICATOR DATA ============
         indicators = await get_technical_indicators(ticker)
         if not indicators:
-            return {"status": "ERROR", "reason": f"No data for {ticker}", "symbol": ticker}
+            return {
+                "status": "ERROR", 
+                "reason": f"No data for {ticker}", 
+                "symbol": ticker,
+                "type": "WAIT",
+                "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
+            }
         
-        # Extract ALL indicator data
+        # Извлечение данных с проверками
         price = indicators.get('price', 0)
-        atr_value = 0.0
         atr_raw = indicators.get('atr_val', '$0')
         if isinstance(atr_raw, str):
             atr_value = float(atr_raw.replace('$', '').replace(',', ''))
         else:
             atr_value = float(atr_raw)
 
-        # === ANTI-HALLUCINATION: DATA VALIDATION ===
+        # Валидация данных
         if price <= 0 or atr_value <= 0:
             return {
                 "status": "ERROR",
                 "reason": f"Invalid market data (Price={price}, ATR={atr_value})",
-                "symbol": ticker
+                "symbol": ticker,
+                "type": "WAIT",
+                "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
             }
 
         change = indicators.get('change', '0%')
         rsi = indicators.get('rsi', 50)
         vwap_raw = indicators.get('vwap', '$0')
-        
-        # Parse VWAP
-        vwap = 0.0
-        if isinstance(vwap_raw, str):
-            vwap = float(vwap_raw.replace('$', '').replace(',', ''))
-        else:
-            vwap = float(vwap_raw)
+        vwap = float(vwap_raw.replace('$', '').replace(',', '')) if isinstance(vwap_raw, str) else float(vwap_raw)
             
         funding_raw = indicators.get('funding', '0%')
-        funding = 0.0
-        if isinstance(funding_raw, str):
-            is_pct = '%' in funding_raw
-            funding = float(funding_raw.replace('%', '').replace('+', ''))
-            if is_pct:
-                funding /= 100.0
-        else:
-            funding = float(funding_raw)
+        funding = float(funding_raw.replace('%', '').replace('+', '')) / 100.0 if isinstance(funding_raw, str) else float(funding_raw)
             
         p_score = indicators.get('p_score', 0)
         regime = indicators.get('btc_regime', 'NEUTRAL')
@@ -441,51 +439,25 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         ctx = MarketContext(
             symbol=ticker,
             price=price,
-            btc_regime=regime.split()[0].lower(), # "EXPANSION (SAFE)" -> "expansion"
+            btc_regime=regime.split()[0].lower(),
             atr=atr_value,
             vwap=vwap,
             funding_rate=funding,
             timestamp=datetime.now(),
-            # Add candle data from indicators if available, or mock it? 
-            # indicators.py fetch_ohlcv returns df. 
-            # But get_technical_indicators returns a DICT with summary.
-            # We need candle data for Kevlar K2.
-            # get_technical_indicators in `bot/indicators.py` DOES NOT currently return candle data in the dict.
-            # It returns 'price', 'change', 'rsi', etc.
-            # IMPORTANT: I need to update `indicators.py` to return candle data OR fetch it here.
-            # `indicators.py` is "Legacy Compatibility".
-            # `bot/market_data.py` has `get_market_context` which returns rich context.
-            # I should prefer using `get_market_context` from `market_data.py` for safety?
-            # But `indicators.py` does the heavy lifting for levels.
-            # Use `get_market_context` to supplement?
-            # Or assume `indicators.py` calc is enough?
-            # Kevlar K2 needs candle close% of range.
-            # I will pass "DEGRADED" candle data for now if indicators.py doesn't have it, 
-            # unless I query market_data. 
-            # BUT `indicators.py` fetches OHLCV. I should modify it to populate candle stats?
-            # Or just fetch `get_market_context` here?
-            # `get_market_context` fetches data again.
-            # Let's fallback to `market_data.get_market_context` which is robust (Phase 2).
-            # But Step 1 already fetched data.
-            # Ideally `get_technical_indicators` should return the candle stats.
-            # I will skip deep K2 check if data missing, but K3/K4/K1 work with Price/ATR/RSI.
-            # Given user urgency, I proceed with available data.
-            candle_open=0, candle_high=0, candle_low=0, candle_close=0, data_quality="OK",
-            rsi=rsi, # Explicitly pass RSI for K3
-            candles=indicators.get('candles', []) # Pass candles for K2
+            candle_open=0, candle_high=0, candle_low=0, candle_close=0,
+            data_quality="OK",
+            rsi=rsi,
+            candles=indicators.get('candles', [])
         )
-        
-        # Hack to support K3/K2 with passed RSI/Candle if possible.
-        # Kevlar v2 uses ctx.rsi.
         
         # KEVLAR CHECK
         strat = indicators.get('strategy', {})
         start_side = strat.get('side', 'NEUTRAL')
         event_type = "SUPPORT" if start_side == "LONG" else "RESISTANCE" if start_side == "SHORT" else "CHECK"
         
+        from bot.kevlar import check_safety_v2
         kevlar_res = check_safety_v2({"event": event_type, "level": str(price)}, ctx, p_score)
         
-        # === ANTI-HALLUCINATION: STRICT BLOCKING ===
         if not kevlar_res.passed:
             return {
                 "status": "BLOCKED",
@@ -493,35 +465,16 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                 "symbol": ticker,
                 "p_score": p_score,
                 "kevlar_passed": False,
-                "type": "WAIT"
+                "type": "WAIT",
+                "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
             }
 
-        # ============ STEP 3: FULL ANALYSIS (ONLY IF PASSED) ============
-        oi = indicators.get('open_interest', '$0')
+        # ============ STEP 3: PARSE LEVELS ============
         support_str = indicators.get('support', 'НЕТ')
         resistance_str = indicators.get('resistance', 'НЕТ')
         
-        if not indicators.get('support'):
-             # Fallback if specific keys missing but string raw exists?
-             pass
-
-        if isinstance(support_str, list):
-             supports = support_str
-             for s in supports:
-                 if 'distance' not in s:
-                     s['distance'] = abs(price - s['price'])
-        else:
-             supports = _parse_levels(support_str, price)
-             
-        if isinstance(resistance_str, list):
-             resistances = resistance_str
-             for r in resistances:
-                 if 'distance' not in r:
-                     r['distance'] = abs(price - r['price'])
-        else:
-             resistances = _parse_levels(resistance_str, price)
-        
-        # ... (Rest of parsing logic) ...
+        supports = _parse_levels(support_str, price)
+        resistances = _parse_levels(resistance_str, price)
         
         # ============ STEP 4: MARKET MAKER BEHAVIOR ANALYSIS ============
         mm_phase, mm_verdict_lines = _detect_accumulation_distribution(
@@ -530,52 +483,29 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         
         liquidity_lines = _detect_liquidity_hunts(price, atr_value, supports, resistances)
         
-        # ============ STEP 5: AI DECISION MAKING (NEW P0 LOGIC) ============
-        direction = "WAIT"
-        entry_level = 0.0
-
-        # Определяем сильные уровни (Score >= 1.0)
+        # ============ STEP 5: AI DECISION MAKING (КРИТИЧЕСКИ ВАЖНО) ============
+        # Сначала ищем сильные уровни
         strong_supports = [l for l in supports if l.get('score', 0) >= 1.0]
-        strong_resistances = [l for l in resistances if l.get('score', 0) >= 1.0]
-
-        # Приоритет: ищем ближайший сильный уровень в пределах 3% от текущей цены
-        max_entry_distance = 0.03  # 3%
-
-        # Проверяем поддержки (LONG)
-        if strong_supports:
-            best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
-            dist = abs(price - best_support['price']) / price
-            
-            if dist <= max_entry_distance:
-                direction = "LONG"
-                entry_level = best_support['price']
-
-        # Проверяем сопротивления (SHORT) только если не нашли лонг
-        if direction == "WAIT" and strong_resistances:
-            best_resist = min(strong_resistances, key=lambda x: abs(x['price'] - price))
-            dist = abs(price - best_resist['price']) / price
-            
-            if dist <= max_entry_distance:
-                direction = "SHORT"
-                entry_level = best_resist['price']
-
-        # Fallback: если P-Score высокий (>50) но нет сильных уровней рядом, 
-        # берем ближайший средний уровень в пределах 5%
-        if direction == "WAIT" and p_score >= 50:
-            all_levels = supports + resistances
-            valid_levels = [l for l in all_levels if l.get('score', -100) > -2.0]  # Не ghost levels
-            
-            if valid_levels:
-                nearest = min(valid_levels, key=lambda x: abs(x['price'] - price))
-                dist = abs(nearest['price'] - price) / price
-                
-                if dist <= 0.05:  # 5% допуск
-                    is_support = nearest['price'] < price
-                    direction = "LONG" if is_support else "SHORT"
-                    entry_level = nearest['price']
+        strong_resists = [l for l in resistances if l.get('score', 0) >= 1.0]
         
-        # ============ STEP 6: CALCULATE ORDERS ============
-        order = None
+        # Логика выбора направления с защитой от ошибок
+        if p_score >= 35:
+            # Проверяем поддержки (LONG)
+            if strong_supports:
+                best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
+                dist = abs(price - best_support['price']) / price
+                if dist <= 0.03:  # 3% допуск
+                    direction = "LONG"
+                    entry_level = best_support['price']
+            # Проверяем сопротивления (SHORT) только если не нашли лонг
+            elif strong_resists:
+                best_resist = min(strong_resists, key=lambda x: abs(x['price'] - price))
+                dist = abs(price - best_resist['price']) / price
+                if dist <= 0.03:  # 3% допуск
+                    direction = "SHORT"
+                    entry_level = best_resist['price']
+        
+        # ============ STEP 6: CALCULATE ORDERS (ТОЛЬКО ЕСЛИ direction != WAIT) ============
         if direction != "WAIT" and entry_level > 0:
             order = build_order_plan(
                 side=direction,
@@ -583,9 +513,7 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                 zone_half=atr_value * Config.ZONE_WIDTH_MULT,
                 atr=atr_value,
                 capital=1000.0,
-                risk_pct=1.0,
-                funding_rate=funding,          # P0 FIX: Funding impact
-                estimated_hold_hours=24.0      # Standard swing
+                risk_pct=1.0
             )
             
             if order and order.reason_blocked:
@@ -593,29 +521,30 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                     "status": "BLOCKED",
                     "reason": f"Order Blocked: {order.reason_blocked}",
                     "symbol": ticker,
-                    "type": "WAIT"
+                    "type": "WAIT",
+                    "p_score": p_score,
+                    "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
                 }
-        
-        # If no setup found but Kevlar passed:
-        if direction == "WAIT":
-             return {
-                 "status": "BLOCKED", 
-                 "reason": "No valid setup found (Low Score or No Levels)", 
-                 "symbol": ticker,
-                 "type": "WAIT"
-             }
+        else:
+            # Явный возврат если нет направления - ЗДЕСЬ НЕТ ОШИБКИ direction
+            return {
+                "status": "BLOCKED", 
+                "reason": "No valid setup found (Low Score or No Levels)", 
+                "symbol": ticker,
+                "type": "WAIT",
+                "p_score": p_score,
+                "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
+            }
 
         # ============ STEP 7: AI CONTEXTUAL ANALYSIS ============
-        from bot.analysis import _generate_ai_contextual_analysis
-
-        ai_analysis = ""
+        # Теперь direction ТОЧНО не "WAIT", можно безопасно использовать
         try:
-            # Вызываем AI только для валидных сделок с P-Score >= 35
-            if direction != "WAIT" and p_score >= Config.P_SCORE_THRESHOLD:
-                # Prepare all levels within 15% range for AI context
+            if p_score >= Config.P_SCORE_THRESHOLD:
+                # Подготовка данных для AI
                 all_context_supports = [l for l in supports if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
                 all_context_resists = [l for l in resistances if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
                 
+                from bot.analysis import _generate_ai_contextual_analysis
                 ai_analysis = await _generate_ai_contextual_analysis(
                     ticker=ticker,
                     price=price,
@@ -637,23 +566,20 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             ai_analysis = "⚠️ AI-анализ временно недоступен"
 
         # ============ STEP 8: RETURN SUCCESS ============
-        # Гарантируем что order не None перед доступом к order.stop_loss
-        if order is None or direction == "WAIT":
-             return {
-                 "status": "BLOCKED", 
-                 "reason": "Order calculation failed or no setup found", 
-                 "symbol": ticker,
-                 "type": "WAIT"
-             }
-
-        mm_block = []
-        mm_block.extend(mm_verdict_lines)
+        # Гарантированно order существует (проверено выше)
+        if order is None:
+            return {
+                "status": "BLOCKED",
+                "reason": "Order calculation failed",
+                "symbol": ticker,
+                "type": "WAIT",
+                "p_score": p_score,
+                "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
+            }
         
-        # DISPLAY ALL LEVELS WITHIN MAX_DIST_PCT (P1 Requirement)
+        # Форматирование уровней для отображения
         visible_supports = [l for l in supports if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
         visible_resists = [l for l in resistances if l['distance'] / price <= Config.MAX_DIST_PCT / 100]
-        
-        # Sort by distance (closeness)
         visible_supports.sort(key=lambda x: x['distance'])
         visible_resists.sort(key=lambda x: x['distance'])
         
@@ -662,12 +588,11 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             "type": "TRADE",
             "symbol": ticker,
             "side": direction.lower(),
-            "entry": order.entry,
-            "stop_loss": order.stop_loss, # Renamed from stop
+            "entry": entry_level,
+            "sl": order.stop_loss, # Renamed from stop
             "tp1": order.tp1,
             "tp2": order.tp2,
             "tp3": order.tp3,
-            "position_size": order.size_units,
             "rrr": order.rrr_tp2,
             "p_score": p_score,
             "kevlar_passed": True,
@@ -695,7 +620,9 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         return {
             "status": "ERROR",
             "reason": str(e),
-            "symbol": ticker
+            "symbol": ticker,
+            "type": "WAIT",
+            "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
         }
 
 
