@@ -27,12 +27,15 @@ from bot.logger import configure_logging  # Removed logger import to avoid circu
 from bot.utils import batch_process
 
 # --- CONFIGURATION ---
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+from bot.config import Config
+
+# --- CONFIGURATION ---
+# load_dotenv() # Loaded in Config
+TOKEN = Config.TELEGRAM_TOKEN
+CHANNEL_ID = Config.TELEGRAM_CHAT_ID
 
 if not TOKEN:
-    print("❌ ОШИБКА: Токен бота не найден! Убедитесь, что BOT_TOKEN есть в .env")
+    print("❌ ОШИБКА: Токен бота не найден! Убедитесь, что TELEGRAM_TOKEN есть в .env")
     sys.exit(1)
 
 # --- LOGGING ---
