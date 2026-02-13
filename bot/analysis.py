@@ -726,9 +726,12 @@ def format_signal_html(signal: dict) -> str:
     # ----- RRR CALCULATION -----
     # Already calc above
     
+    # P0 FIX: Display REAL PRICE, not entry
+    display_price = signal.get('current_price', signal['entry'])
+    
     final_text = f"""
 💎 <b>{signal['symbol']}</b> | M30 SNIPER
-💰 ${signal['entry']:,.2f} ({signal.get('change', 0):+.2f}%)
+💰 ${display_price:,.2f} ({signal.get('change', 0):+.2f}%)
 ─────────────────────────
 🎯 P-Score: {signal['p_score']}/100
 🛡️ Kevlar: {'ПРОЙДЕН ✅' if signal.get('kevlar_passed') else 'БЛОКИРОВАН ❌'}

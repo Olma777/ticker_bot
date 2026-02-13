@@ -618,7 +618,8 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             "logic_summary": mm_verdict_lines[0].lstrip("• ").strip() if mm_verdict_lines else "Market Neutral",
             
             "rsi": rsi,
-            "change": float(change.replace('%', '').replace('+', '')) if '%' in change else 0.0
+            "change": float(change.replace('%', '').replace('+', '')) if '%' in change else 0.0,
+            "current_price": price
         }
         
     except Exception as e:
