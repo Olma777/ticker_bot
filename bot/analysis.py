@@ -252,30 +252,56 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 
 def _clean_telegram_html(text: str) -> str:
     """
-    Smart HTML cleaner:
-    1. Escapes EVERYTHING first (safe by default).
-    2. Restores ONLY the tags used by the bot (`<b>`, `<code>`).
+    AGGRESSIVE cleaner - ONLY allows: <b>, <i>, <u>, <code>, <pre>, <a>
+    Everything else -> plain text or removed.
+    Handles lists (<ol>, <ul>, <li>) by converting to bullets.
     """
     if not text:
         return ""
     
-    # 1. Escape basic XML entities
+    import re
+    
+    # STEP 1: Convert lists to plain text BEFORE escaping
+    # Replace <li> with bullet and newline
+    text = re.sub(r'<li[^>]*>', '• ', text, flags=re.IGNORECASE)
+    # Replace closing </li> with newline
+    text = re.sub(r'</li>', '\n', text, flags=re.IGNORECASE)
+    # Replace list containers with newlines
+    text = re.sub(r'<[ou]l[^>]*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</[ou]l>', '\n', text, flags=re.IGNORECASE)
+    
+    # STEP 2: Protect allowed tags with placeholders
+    allowed = ['b', 'strong', 'i', 'em', 'u', 'code', 'pre', 'a']
+    placeholders = []
+    
+    def replacer(match):
+        placeholders.append(match.group(0))
+        return f"\x00{len(placeholders)-1}\x00"
+
+    for tag in allowed:
+        # Protect opening tags (including attributes for <a>)
+        pattern_open = rf'<{tag}\b[^>]*>'
+        text = re.sub(pattern_open, replacer, text, flags=re.IGNORECASE)
+        
+        # Protect closing tags
+        pattern_close = rf'</{tag}>'
+        text = re.sub(pattern_close, replacer, text, flags=re.IGNORECASE)
+    
+    # STEP 3: Escape ALL remaining HTML characters
+    # This safely neutralizes <script>, unknown tags, and unescaped chars
     text = text.replace('&', '&amp;')
     text = text.replace('<', '&lt;')
     text = text.replace('>', '&gt;')
     text = text.replace('"', '&quot;')
     
-    # 2. Restore ONLY bot-generated tags
-    # We generated these ourselves, so we know they are safe.
-    # Any <script> or <b> from AI/User remains escaped as &lt;script&gt;
+    # STEP 4: Restore protections
+    for i, ph in enumerate(placeholders):
+        text = text.replace(f"\x00{i}\x00", ph)
     
-    # Bold
-    text = text.replace('&lt;b&gt;', '<b>').replace('&lt;/b&gt;', '</b>')
+    # STEP 5: Normalize whitespace (max 2 newlines)
+    text = re.sub(r'\n{3,}', '\n\n', text.strip())
     
-    # Code (Monospace)
-    text = text.replace('&lt;code&gt;', '<code>').replace('&lt;/code&gt;', '</code>')
-    
-    return text.strip()
+    return text
     if not text:
         return ""
 
@@ -418,7 +444,8 @@ async def _generate_ai_contextual_analysis(
 
 # ===== AI ANALYST - FORCED MODE =====
 try:
-    from bot.ai_analyst import get_ai_sniper_analysis
+    # Duplicate import removed
+    # from bot.ai_analyst import get_ai_sniper_analysis
     AI_ANALYST_AVAILABLE = True
     logger.info("✅ AI Analyst FORCED MODE - ENABLED")
 except ImportError as e:

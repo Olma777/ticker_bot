@@ -387,7 +387,19 @@ async def daily_manual_handler(message: Message) -> None:
             else:
                  response.append(f"{symbol}: ❓ {str(result)[:20]}...")
 
-        await message.answer("\n".join(response), parse_mode=ParseMode.HTML)
+        try:
+            report = format_signal_html(signal)
+            await message.answer(report, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"HTML formatting failed: {e}")
+            # Fallback: Send basic text if HTML fails
+            fallback_report = (
+                f"💎 {signal['symbol']} | M30 SNIPER\n"
+                f"🎯 P-Score: {signal.get('p_score', 'N/A')}\n"
+                f"⚠️ Full analysis unavailable (HTML Error).\n"
+                f"Entry: {signal.get('entry', 'N/A')}"
+            )
+            await message.answer(fallback_report)
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {e}")
 
@@ -425,21 +437,103 @@ async def cmd_test_post(message: Message) -> None:
 # --- MAIN ---
 
 import fcntl
-import os # Added import for os
-import sys # Added import for sys
+import os 
+import sys
+import aiosqlite  # Added for DB lock
+from datetime import datetime, timedelta, timezone
+
+async def acquire_instance_lock():
+    """
+    SQLite-based distributed lock for Railway.
+    Ensures only one instance runs at a time using a shared DB file.
+    """
+    lock_db = Config.DATA_DIR / "instance.lock"
+    Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    
+    async with aiosqlite.connect(lock_db) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS instance_lock (
+                id INTEGER PRIMARY KEY,
+                pid INTEGER,
+                started_at TIMESTAMP,
+                expires_at TIMESTAMP
+            )
+        """)
+        
+        # Check if an active instance exists (Valid/Alive if expires_at > now)
+        # We use UTC for consistency
+        now_utc = datetime.now(timezone.utc)
+        cutoff = now_utc
+        
+        cursor = await db.execute(
+            "SELECT pid FROM instance_lock WHERE expires_at > ?",
+            (cutoff,)
+        )
+        existing = await cursor.fetchone()
+        
+        if existing:
+            # Check if process is actually alive (Local/Same Container check)
+            # In a new container, this PID check might be irrelevant for the OLD container,
+            # but the DB lock timestamp is the real guard across containers.
+            # If the DB lock is fresh, we back off.
+            existing_pid = existing[0]
+            try:
+                # If we are on the same machine, strict check
+                if existing_pid != os.getpid():
+                     os.kill(existing_pid, 0)
+                     print(f"❌ Instance {existing_pid} is alive and holding lock. Exiting.")
+                     sys.exit(1)
+            except ProcessLookupError:
+                # Process is dead locally, but DB says alive?
+                # On shared volume, this means another container is holding it.
+                # On ephemeral, the file shouldn't exist unless checking failure.
+                pass
+            
+            # If we get here, and DB lock is valid, we assume conflict in Orchestrator
+            print(f"❌ Active lock found in DB (expires in future). Another instance likely running.")
+            sys.exit(1)
+
+        # Acquire Lock
+        # Clear old locks
+        await db.execute("DELETE FROM instance_lock")
+        
+        # Insert new lock (TTL 60s)
+        expires = now_utc + timedelta(seconds=60)
+        await db.execute(
+            "INSERT INTO instance_lock (pid, started_at, expires_at) VALUES (?, ?, ?)",
+            (os.getpid(), now_utc, expires)
+        )
+        await db.commit()
+        print(f"🔒 Instance locked (PID: {os.getpid()})")
+
+async def lock_heartbeat():
+    """Updates the lock TTL every 30 seconds."""
+    lock_db = Config.DATA_DIR / "instance.lock"
+    while True:
+        try:
+            await asyncio.sleep(30)
+            now_utc = datetime.now(timezone.utc)
+            new_expires = now_utc + timedelta(seconds=60)
+            
+            async with aiosqlite.connect(lock_db) as db:
+                await db.execute(
+                    "UPDATE instance_lock SET expires_at = ? WHERE pid = ?",
+                    (new_expires, os.getpid())
+                )
+                await db.commit()
+        except Exception as e:
+            print(f"⚠️ Lock heartbeat failed: {e}")
+            # Don't exit, just retry next tick
 
 async def main() -> None:
     """Main entry point with single-instance lock."""
     
-    # === SINGLE INSTANCE LOCK ===
-    lock_file = "/tmp/marketlens-bot.lock"
-    try:
-        fd = os.open(lock_file, os.O_CREAT | os.O_RDWR)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (IOError, BlockingIOError):
-        print("❌ Another instance is already running. Exiting.")
-        sys.exit(1)
-    # ==============================
+    # === DISTRIBUTED INSTANCE LOCK (SQLite) ===
+    # Prevents Railway double-instance issues during redeploy
+    await acquire_instance_lock()
+    # Start heartbeat task
+    asyncio.create_task(lock_heartbeat())
+    # ==========================================
 
     logger.info("bot_started", version="v3.7.1-HOTFIX-2")
     # Initialize database
