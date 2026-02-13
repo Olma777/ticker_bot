@@ -704,6 +704,12 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             "open_interest": f"${open_interest:,.0f}" if open_interest else "N/A",
             "support": fmt_lvls(m30_sup),
             "resistance": fmt_lvls(m30_res),
+            # RAW level dicts for ai_analyst.py (no string parsing needed)
+            "supports_raw": m30_sup,
+            "resistances_raw": m30_res,
+            "level_source": lvl_source,
+            "regime_state": regime,
+            "regime_safety": safety,
             "vol_low": f"${vol_low:.4f}",
             "vol_high": f"${vol_high:.4f}",
             "vwap": f"${vwap_24h:.4f}",

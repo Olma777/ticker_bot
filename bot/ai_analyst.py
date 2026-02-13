@@ -500,8 +500,10 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             
         p_score = indicators.get('p_score', 0)
         regime = indicators.get('btc_regime', 'NEUTRAL')
+        regime_safety = indicators.get('regime_safety', 'UNKNOWN')
+        level_source = indicators.get('level_source', 'LOCAL')
         
-        # ============ STEP 2: BUILD CONTEXT & KEVLAR CHECK ============
+        # ============ STEP 2: BUILD CONTEXT ============
         ctx = MarketContext(
             symbol=ticker,
             price=price,
@@ -515,14 +517,86 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             rsi=rsi,
             candles=indicators.get('candles', [])
         )
+
+        # ============ STEP 3: GET LEVELS (TradingView → Local Fallback) ============
+        # Priority: raw dicts from MarketDataProvider (already resolved in indicators.py)
+        supports = indicators.get('supports_raw', [])
+        resistances = indicators.get('resistances_raw', [])
         
-        # KEVLAR CHECK
+        # Fallback: parse formatted strings (legacy path)
+        if not supports and not resistances:
+            support_str = indicators.get('support', 'НЕТ')
+            resistance_str = indicators.get('resistance', 'НЕТ')
+            supports = _parse_levels(support_str, price)
+            resistances = _parse_levels(resistance_str, price)
+            level_source = "LOCAL_PARSED"
+        
+        # Ensure 'distance' field exists for all levels
+        for lvl in supports + resistances:
+            if 'distance' not in lvl:
+                lvl['distance'] = abs(price - lvl['price'])
+        
+        logger.info(f"📊 {ticker} Levels [{level_source}]: {len(supports)} SUP, {len(resistances)} RES")
+
+        # ============ STEP 3B: REGIME SAFETY CHECK ============
+        if regime_safety == 'RISKY' and p_score < 60:
+            return {
+                "status": "BLOCKED",
+                "reason": f"TradingView Safety: RISKY (P-Score {p_score} < 60)",
+                "symbol": ticker,
+                "p_score": p_score,
+                "kevlar_passed": True,
+                "type": "WAIT",
+                "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
+            }
+
+        # ============ STEP 4: AI DECISION MAKING ============
+        strong_supports = [l for l in supports if l.get('score', 0) >= 1.0]
+        strong_resists = [l for l in resistances if l.get('score', 0) >= 1.0]
+        
+        if p_score >= 35:
+            # Check supports (LONG candidates)
+            if strong_supports:
+                best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
+                dist = abs(price - best_support['price']) / price
+                if dist <= 0.03:  # 3% margin
+                    direction = "LONG"
+                    entry_level = best_support['price']
+            # Check resistances (SHORT candidates)
+            if direction == "WAIT" and strong_resists:
+                best_resist = min(strong_resists, key=lambda x: abs(x['price'] - price))
+                dist = abs(price - best_resist['price']) / price
+                if dist <= 0.03:  # 3% margin
+                    direction = "SHORT"
+                    entry_level = best_resist['price']
+        
+        # ============ STEP 4B: ANTI-TRAP (LONG at resistance / SHORT at support) ============
+        if direction == "LONG" and strong_resists:
+            nearest_res = min(strong_resists, key=lambda x: abs(x['price'] - price))
+            # Block LONG if price is within 1% of strong resistance
+            if nearest_res['price'] > price and (nearest_res['price'] - price) / price < 0.01:
+                logger.warning(f"⚠️ ANTI-TRAP: LONG blocked — price {price} too close to RES {nearest_res['price']} (Sc:{nearest_res['score']})")
+                direction = "WAIT"
+                entry_level = 0.0
+        
+        if direction == "SHORT" and strong_supports:
+            nearest_sup = min(strong_supports, key=lambda x: abs(x['price'] - price))
+            # Block SHORT if price is within 1% of strong support
+            if nearest_sup['price'] < price and (price - nearest_sup['price']) / price < 0.01:
+                logger.warning(f"⚠️ ANTI-TRAP: SHORT blocked — price {price} too close to SUP {nearest_sup['price']} (Sc:{nearest_sup['score']})")
+                direction = "WAIT"
+                entry_level = 0.0
+
+        # ============ STEP 5: KEVLAR CHECK (after levels for accurate distance) ============
         strat = indicators.get('strategy', {})
         start_side = strat.get('side', 'NEUTRAL')
-        event_type = "SUPPORT" if start_side == "LONG" else "RESISTANCE" if start_side == "SHORT" else "CHECK"
+        event_type = "SUPPORT" if direction == "LONG" or start_side == "LONG" else "RESISTANCE" if direction == "SHORT" or start_side == "SHORT" else "CHECK"
+        
+        # Use nearest level for Kevlar distance check (not current price)
+        kevlar_level = entry_level if entry_level > 0 else price
         
         from bot.kevlar import check_safety_v2
-        kevlar_res = check_safety_v2({"event": event_type, "level": str(price)}, ctx, p_score)
+        kevlar_res = check_safety_v2({"event": event_type, "level": str(kevlar_level)}, ctx, p_score)
         
         if not kevlar_res.passed:
             return {
@@ -534,42 +608,13 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                 "type": "WAIT",
                 "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
             }
-
-        # ============ STEP 3: PARSE LEVELS ============
-        support_str = indicators.get('support', 'НЕТ')
-        resistance_str = indicators.get('resistance', 'НЕТ')
         
-        supports = _parse_levels(support_str, price)
-        resistances = _parse_levels(resistance_str, price)
-        
-        # ============ STEP 4: MARKET MAKER BEHAVIOR ANALYSIS ============
+        # ============ STEP 5B: MARKET MAKER BEHAVIOR ANALYSIS ============
         mm_phase, mm_verdict_lines = _detect_accumulation_distribution(
             price, vwap, rsi, funding, supports, resistances, p_score
         )
         
         liquidity_lines = _detect_liquidity_hunts(price, atr_value, supports, resistances)
-        
-        # ============ STEP 5: AI DECISION MAKING (КРИТИЧЕСКИ ВАЖНО) ============
-        # Сначала ищем сильные уровни
-        strong_supports = [l for l in supports if l.get('score', 0) >= 1.0]
-        strong_resists = [l for l in resistances if l.get('score', 0) >= 1.0]
-        
-        # Логика выбора направления с защитой от ошибок
-        if p_score >= 35:
-            # Проверяем поддержки (LONG)
-            if strong_supports:
-                best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
-                dist = abs(price - best_support['price']) / price
-                if dist <= 0.03:  # 3% допуск
-                    direction = "LONG"
-                    entry_level = best_support['price']
-            # Проверяем сопротивления (SHORT) только если не нашли лонг
-            elif strong_resists:
-                best_resist = min(strong_resists, key=lambda x: abs(x['price'] - price))
-                dist = abs(price - best_resist['price']) / price
-                if dist <= 0.03:  # 3% допуск
-                    direction = "SHORT"
-                    entry_level = best_resist['price']
         
         # ============ STEP 6: UNIVERSAL VALIDATION ============
         if direction != "WAIT":
