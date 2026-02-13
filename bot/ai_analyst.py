@@ -538,23 +538,18 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         
         logger.info(f"📊 {ticker} Levels [{level_source}]: {len(supports)} SUP, {len(resistances)} RES")
 
-        # ============ STEP 3B: REGIME SAFETY CHECK ============
-        if regime_safety == 'RISKY' and p_score < 60:
-            return {
-                "status": "BLOCKED",
-                "reason": f"TradingView Safety: RISKY (P-Score {p_score} < 60)",
-                "symbol": ticker,
-                "p_score": p_score,
-                "kevlar_passed": True,
-                "type": "WAIT",
-                "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
-            }
+        # ============ STEP 3B: REGIME SAFETY ADJUSTMENT ============
+        # RISKY regime = raise P-Score threshold for entry (soft gate, not hard block)
+        min_pscore_for_entry = 35  # default
+        if regime_safety == 'RISKY':
+            min_pscore_for_entry = 50  # need stronger signal in risky markets
+            logger.info(f"⚠️ {ticker}: BTC regime RISKY → P-Score threshold raised to {min_pscore_for_entry}")
 
         # ============ STEP 4: AI DECISION MAKING ============
         strong_supports = [l for l in supports if l.get('score', 0) >= 1.0]
         strong_resists = [l for l in resistances if l.get('score', 0) >= 1.0]
         
-        if p_score >= 35:
+        if p_score >= min_pscore_for_entry:
             # Check supports (LONG candidates)
             if strong_supports:
                 best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
