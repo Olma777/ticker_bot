@@ -538,16 +538,22 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", timeframe, limit=1500)
         funding_task = fetch_funding_rate(exchange, pair)
         oi_task = fetch_open_interest(exchange, pair)
+        # P0 FIX: Fetch Real-Time Ticker for accurate price
+        ticker_task = exchange.fetch_ticker(pair)
 
-        df, btc_df, funding_rate, open_interest = await asyncio.gather(
-            m30_task, btc_task, funding_task, oi_task
+        df, btc_df, funding_rate, open_interest, ticker_data = await asyncio.gather(
+            m30_task, btc_task, funding_task, oi_task, ticker_task
         )
         
         # === DIAGNOSTICS FOR DATA INTEGRITY ===
         logger.info("=" * 60)
         logger.info(f"📊 DIAGNOSTICS FOR {pair}")
         logger.info("=" * 60)
-        
+         
+        # P0 FIX: Real-time price from ticker
+        current_price = float(ticker_data['last']) if ticker_data else df['close'].iloc[-1]
+        logger.info(f"✅ Real-Time Price (Ticker): ${current_price}")
+
         if df is None:
             logger.error(f"❌ NO DATA: fetch_ohlcv_data returned None for {ticker}")
             return None
@@ -578,13 +584,12 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
         
         # Data Integrity Checks
-        last_price = df['close'].iloc[-1]
-        logger.info(f"✅ Current price: ${last_price:.2f}")
+        logger.info(f"✅ Current price: ${current_price:.2f}")
 
         # Check 5 candles ago for K2_NO_BRAKES
         if len(df) >= 5:
             price_5_ago = df['close'].iloc[-5]
-            change_5 = ((last_price / price_5_ago) - 1) * 100
+            change_5 = ((current_price / price_5_ago) - 1) * 100 # Use real price
             logger.info(f"✅ Price 5 candles ago: ${price_5_ago:.2f}")
             logger.info(f"✅ Change over 5 candles: {change_5:.1f}%")
             if change_5 < -3.0:
@@ -603,11 +608,6 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             await diagnose_pivot_detection(df)
         
         logger.info("=" * 60)
-
-        df['atr'] = calculate_atr(df)
-        df['rsi'] = calculate_rsi(df)
-        regime, safety = calculate_global_regime(btc_df)
-        m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
         
         # === LEVEL DIAGNOSTICS (P0 FIX) ===
         logger.info(f"📊 LEVELS DETECTED: {len(m30_sup)} supports, {len(m30_res)} resistances")
@@ -619,7 +619,6 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         if not m30_sup and not m30_res:
             logger.warning("⚠️ NO LEVELS FOUND! Check pivot detection and merge logic.")
         
-        current_price = df['close'].iloc[-1]
         
         # Log basics
         earliest = df['time'].iloc[0]

@@ -392,6 +392,7 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         from bot.order_calc import build_order_plan
         from bot.config import Config
         from bot.models.market_context import MarketContext
+        from bot.prices import get_price
         
         logger.info(f"📊 INDICATOR: Fetching data for {ticker}")
         
@@ -406,8 +407,13 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                 "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
             }
         
-        # Извлечение данных с проверками
-        price = indicators.get('price', 0)
+        # Извлечение данных с проверками (P0 FIX: Real-time Price)
+        # price = indicators.get('price', 0) <- OLD
+        try:
+             price = await get_price(ticker, force_refresh=True)
+        except Exception as e:
+             logger.warning(f"Force refresh price failed, utilizing indicator price: {e}")
+             price = indicators.get('price', 0)
         atr_raw = indicators.get('atr_val', '$0')
         if isinstance(atr_raw, str):
             atr_value = float(atr_raw.replace('$', '').replace(',', ''))

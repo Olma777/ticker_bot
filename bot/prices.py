@@ -151,31 +151,35 @@ async def _original_fetch_logic(symbol: str) -> float:
         
     return price_val
 
-async def get_price(symbol: str, max_age_seconds: int = 30) -> float:
+async def get_price(symbol: str, max_age_seconds: int = 30, force_refresh: bool = False) -> float:
     """
     Получить цену с проверкой актуальности.
     max_age_seconds: максимальный возраст цены из кэша (по умолчанию 30 сек).
+    force_refresh: ignore cache and fetch fresh price (critical for sniper).
     Raises PriceUnavailableError on ANY failure.
     """
     cache_key = f"price:{symbol}"
     
+    # Для снайпера: всегда свежие данные
+    if force_refresh:
+        try:
+            price = await _original_fetch_logic(symbol)
+            # Обновляем кэш для других компонентов
+            ttl_cache = cache._caches.get("price")
+            if ttl_cache:
+                ttl_cache[cache_key] = price
+            return price
+        except Exception as e:
+            logger.error("force_refresh_failed", symbol=symbol, error=str(e))
+            # Fallback на кэш если обновление не удалось, или ре-рейз?
+            # User request implies fallback logic or strict? 
+            # "Fallback на кэш если обновление не удалось pass" -> means proceed to standard logic
+            pass
+    
     # Проверяем кэш вручную для контроля возраста
-    # Accessing internal _caches to check TTL validity if possible
-    # Note: TieredCache abstraction might hide this, but we use the user's workaround
     try:
         ttl_cache = cache._caches.get("price")
         if ttl_cache and cache_key in ttl_cache:
-             # TTLCache doesn't expose timestamp publicly easily, 
-             # but get() returns value if valid, None if expired.
-             # If we want to enforce stricter age than the cache's default TTL (which might be 60s),
-             # we can't easily do it without storing timestamp.
-             # BUT the user instruction implies relying on TTLCache's internal expiry mechanism 
-             # OR that this is a placeholder for future timestamping.
-             # For now, we trust the cache's own expiry if it returns a value.
-             # To force refresh if user asks for 30s but cache is 60s, we might need to skip cache.
-             # However, given the snippet, we just read from cache if available.
-             
-             # The user code:
              cached_val = ttl_cache.get(cache_key)
              if cached_val is not None:
                  return float(cached_val)
