@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 from bot.models.market_context import MarketContext
 from bot.kevlar import check_safety_v2
+from bot.formatting import format_price_universal as _format_price
 
 
 def draw_bar(value, total=100, length=10):
@@ -69,18 +70,7 @@ def _parse_levels(level_str: str, current_price: float) -> List[Dict]:
 
 
 
-def _format_price(price: float) -> str:
-    """Adaptive price formatting (Duplicate from analysis.py to avoid circular import)"""
-    if price is None or price == 0:
-        return "$0"
-    abs_price = abs(price)
-    if abs_price < 1.0:
-        return f"${price:.4f}"
-    if abs_price < 100:
-        return f"${price:.2f}"
-    if abs_price >= 10000:
-        return f"${price:,.0f}"
-    return f"${price:,.2f}"
+# Helper _format_price replaced by import from bot.formatting
 
 
 def _format_levels_for_display(levels: List[Dict], count: int = 3) -> str:
@@ -380,9 +370,64 @@ def _determine_market_phase(
     return "КОНСОЛИДАЦИЯ / НЕОПРЕДЕЛЕННОСТЬ"
 
 
-# ============================================
-# PART 4: CORE AI ANALYST FUNCTION
-# ============================================
+# ============ STEP 3.5: UNIVERSAL VALIDATION ============
+
+def validate_entry_for_any_ticker(
+    price: float,
+    entry: float,
+    direction: str,
+    supports: List[Dict],
+    resistances: List[Dict],
+    atr: float
+) -> Tuple[bool, str]:
+    """
+    Universal entry validation for any ticker (BTC, SHIB, etc.).
+    Checks for Air Entry, Direction mismatch, and Weak Levels.
+    """
+    if direction == "WAIT" or entry == 0:
+        return False, "No entry signal"
+
+    # 1. Air Entry Check (Too far from current price)
+    # limit: 2 * ATR
+    dist = abs(entry - price)
+    limit = atr * 2.0
+    if dist > limit:
+        return False, f"Air Entry: Entry {entry} is too far from price {price} (> 2xATR)"
+
+    # 2. Direction vs Level Type
+    if direction == "LONG":
+        # Entry must be near a SUPPORT level
+        # Find nearest support
+        if not supports:
+            return False, "No support levels for LONG"
+        
+        nearest = min(supports, key=lambda x: abs(x['price'] - entry))
+        
+        # Check if entry is "connected" to this support (within 0.5 ATR)
+        if abs(entry - nearest['price']) > atr * 0.5:
+             return False, f"LONG entry {entry} not aligned with nearest support {nearest['price']}"
+             
+        # Check Score
+        if nearest.get('score', 0) < 1.0:
+             return False, f"Weak Support Level (Score {nearest.get('score', 0):.1f})"
+
+    elif direction == "SHORT":
+        # Entry must be near a RESISTANCE level
+        if not resistances:
+            return False, "No resistance levels for SHORT"
+            
+        nearest = min(resistances, key=lambda x: abs(x['price'] - entry))
+        
+        # Check if entry is "connected" to this resistance
+        if abs(entry - nearest['price']) > atr * 0.5:
+             return False, f"SHORT entry {entry} not aligned with nearest resistance {nearest['price']}"
+
+        # Check Score
+        if nearest.get('score', 0) < 1.0:
+             return False, f"Weak Resistance Level (Score {nearest.get('score', 0):.1f})"
+
+    return True, "Valid"
+
 
 async def get_ai_sniper_analysis(ticker: str) -> Dict:
     """
@@ -526,7 +571,23 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                     direction = "SHORT"
                     entry_level = best_resist['price']
         
-        # ============ STEP 6: CALCULATE ORDERS (ТОЛЬКО ЕСЛИ direction != WAIT) ============
+        # ============ STEP 6: UNIVERSAL VALIDATION ============
+        if direction != "WAIT":
+            is_valid, val_reason = validate_entry_for_any_ticker(
+                price, entry_level, direction, supports, resistances, atr_value
+            )
+            if not is_valid:
+                logger.warning(f"⛔ VALIDATION BLOCKED {ticker}: {val_reason}")
+                return {
+                    "status": "BLOCKED",
+                    "reason": f"Validation Failed: {val_reason}",
+                    "symbol": ticker,
+                    "type": "WAIT",
+                    "p_score": p_score,
+                    "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
+                }
+
+        # ============ STEP 7: CALCULATE ORDERS ============
         if direction != "WAIT" and entry_level > 0:
             order = build_order_plan(
                 side=direction,

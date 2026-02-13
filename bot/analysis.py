@@ -14,6 +14,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_ATTEMPTS
 from bot.prices import get_crypto_price
+from bot.formatting import format_price_universal as _format_price
 from bot.indicators import get_technical_indicators
 from bot.cache import TieredCache
 from bot.logger import logger
@@ -37,25 +38,7 @@ rate_limiter = AsyncLimiter(RATE_LIMITS.openrouter_requests, RATE_LIMITS.openrou
 daily_cache: dict[str, str] = {}
 
 
-# --- HELPER FUNCTIONS ---
-
-def _format_price(price: float) -> str:
-    """
-    Адаптивное форматирование цены для Telegram.
-    Критично для активов < $1 (HBAR, SHIB и т.д.)
-    """
-    if price is None or price == 0:
-        return "$0"
-    
-    abs_price = abs(price)
-    
-    if abs_price < 1.0:
-        return f"${price:.4f}"
-    if abs_price < 100:
-        return f"${price:.2f}"
-    if abs_price >= 10000:
-        return f"${price:,.0f}"
-    return f"${price:,.2f}"
+# Helper _format_price replaced by import from bot.formatting
 
 
 async def fetch_ticker_multisource(

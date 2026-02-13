@@ -21,7 +21,7 @@ import structlog  # Added import
 from bot.db import init_db, get_user_setting, set_user_setting, delete_user_setting, get_all_users_for_hour
 from bot.prices import get_crypto_price, get_market_summary
 from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan, format_signal_html
-from bot.validators import SymbolValidator, InvalidSymbolError
+from bot.validators import SymbolNormalizer, InvalidSymbolError
 from bot.prices import PriceUnavailableError
 from bot.logger import configure_logging  # Removed logger import to avoid circular dep or re-init
 from bot.utils import batch_process
@@ -197,11 +197,11 @@ async def audit_handler(message: Message) -> None:
         return
     symbol_raw = args[1]
     try:
-        symbol = SymbolValidator.validate(symbol_raw)
+        norm = SymbolNormalizer.normalize(symbol_raw)
+        ticker = norm['base']
     except InvalidSymbolError as e:
         await message.answer(f"❌ Invalid symbol: {e}")
         return
-    ticker = symbol.replace("USDT", "").replace("USDC", "").replace("BUSD", "").replace("FDUSD", "")
     
     loading_msg = await message.answer(f"🛡 <b>Изучаю проект {ticker}...</b>", parse_mode=ParseMode.HTML)
     
@@ -237,11 +237,11 @@ async def cmd_sniper(message: Message) -> None:
         return
     
     try:
-        symbol = SymbolValidator.validate(args)
+        norm = SymbolNormalizer.normalize(args)
+        ticker = norm['base']
     except InvalidSymbolError as e:
         await message.answer(f"❌ Invalid symbol: {e}")
         return
-    ticker = symbol.replace("USDT", "").replace("USDC", "").replace("BUSD", "").replace("FDUSD", "")
     loading_msg = await message.answer(f"🔭 Снайпер-модуль сканирует {ticker}...")
     
     try:
@@ -370,7 +370,7 @@ async def cmd_scan(message: Message) -> None:
     if len(args_list) > 1:
         symbol_raw = args_list[1]
         try:
-            SymbolValidator.validate(symbol_raw)
+            SymbolNormalizer.normalize(symbol_raw)
         except InvalidSymbolError as e:
             await message.answer(f"❌ Invalid symbol: {e}")
             return

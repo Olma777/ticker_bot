@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 from bot.config import TRADING, EXCHANGE_OPTIONS, Config
 from bot.models.market_context import Candle
+from bot.validators import SymbolNormalizer
+from bot.data_provider import MarketDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +156,7 @@ async def fetch_open_interest(exchange: ccxt.Exchange, symbol: str) -> float:
         return 0.0
 
 
-def process_levels(df: pd.DataFrame, max_dist_pct: float = Config.MAX_DIST_PCT) -> tuple[List[dict], List[dict]]:
+def process_levels(df: pd.DataFrame) -> tuple[List[dict], List[dict]]:
     """
     Process support and resistance levels (Legacy for /sniper).
     Synchronized with Pine Script v3.7 Logic.
@@ -304,7 +306,7 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = Config.MAX_DIST_PCT) 
     
     # Filter by Distance (Anti-Hallucination)
     current_price = df['close'].iloc[-1]
-    max_dist = current_price * (max_dist_pct / 100.0)
+    max_dist = current_price * (Config.MAX_DIST_PCT / 100.0)
     
     supports = [s for s in supports if abs(s['price'] - current_price) <= max_dist]
     resistances = [r for r in resistances if abs(r['price'] - current_price) <= max_dist]
@@ -527,9 +529,10 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         # P0 FIX: Enforce 30m timeframe strict
         timeframe = "30m"
         
-        # Normalize Ticker (Remove /USDT if present to avoiding doubling)
-        clean_ticker = ticker.upper().replace("/USDT", "").replace("USDT", "")
-        pair = f"{clean_ticker}/USDT"
+        # Normalize Ticker
+        norm = SymbolNormalizer.normalize(ticker)
+        clean_ticker = norm['base']
+        pair = norm['ccxt']
         
         logger.info(f"🔍 FETCHING {pair} 30m data from Binance...")
         
@@ -581,7 +584,9 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
         regime, safety = calculate_global_regime(btc_df)
-        m30_sup, m30_res = process_levels(df, max_dist_pct=Config.MAX_DIST_PCT)
+        # Data Provider Abstraction (Webhook vs Local)
+        m30_sup, m30_res, lvl_source = await MarketDataProvider.get_levels(clean_ticker, df)
+        logger.info(f"✅ Levels Source: {lvl_source}")
         
         # Data Integrity Checks
         logger.info(f"✅ Current price: ${current_price:.2f}")
