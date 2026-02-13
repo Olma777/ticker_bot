@@ -292,13 +292,14 @@ async def cmd_sniper(message: Message) -> None:
                 friendly_reason = reason
                 advice = "Рынок в неопределенности. Рекомендуем проверить актив через 30-60 минут."
                 
-                if "Low Score" in reason:
+                # Kevlar block is highest priority — check FLAG, not substring
+                if not kevlar_passed:
+                    friendly_reason = "Сработала защита Kevlar (фильтр опасных движений)."
+                    advice = "Высокая волатильность или риск 'падающего ножа'. Оставайтесь в стороне."
+                elif "Low Score" in reason:
                     friendly_reason = f"Низкий P-Score ({p_score}/100). Недостаточно аргументов для входа."
                 elif "No levels" in reason:
                     friendly_reason = "Цена находится в 'воздухе' между уровнями. Ждем теста поддержки или сопротивления."
-                elif "Kevlar" in reason:
-                    friendly_reason = "Сработала защита Kevlar (фильтр опасных движений)."
-                    advice = "Высокая волатильность или риск 'падающего ножа'. Оставайтесь в стороне."
                 elif "No valid setup" in reason:
                     friendly_reason = f"Нет четкой структуры. P-Score: {p_score}/100."
                 
