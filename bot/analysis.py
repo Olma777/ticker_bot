@@ -252,56 +252,103 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 
 def _clean_telegram_html(text: str) -> str:
     """
-    AGGRESSIVE cleaner - ONLY allows: <b>, <i>, <u>, <code>, <pre>, <a>
-    Everything else -> plain text or removed.
-    Handles lists (<ol>, <ul>, <li>) by converting to bullets.
+    Converts AI-HTML to Telegram-safe format.
+    Structure: <b>->bold, <li>->•, <ol>->1. 2. 3.
     """
     if not text:
         return ""
     
     import re
     
-    # STEP 1: Convert lists to plain text BEFORE escaping
-    # Replace <li> with bullet and newline
-    text = re.sub(r'<li[^>]*>', '• ', text, flags=re.IGNORECASE)
-    # Replace closing </li> with newline
-    text = re.sub(r'</li>', '\n', text, flags=re.IGNORECASE)
-    # Replace list containers with newlines
-    text = re.sub(r'<[ou]l[^>]*>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</[ou]l>', '\n', text, flags=re.IGNORECASE)
+    # 1. Convert lists to plain text (IMPORTANT: before any escaping)
+    # <ol> + <li> -> 1., 2., 3.
+    def convert_ordered_list(match):
+        items = re.findall(r'<li[^>]*>(.*?)</li>', match.group(1), re.DOTALL | re.IGNORECASE)
+        return '\\n'.join(f"{i+1}. {item.strip()}" for i, item in enumerate(items))
     
-    # STEP 2: Protect allowed tags with placeholders
-    allowed = ['b', 'strong', 'i', 'em', 'u', 'code', 'pre', 'a']
-    placeholders = []
+    # <ul> + <li> -> • • •
+    def convert_unordered_list(match):
+        items = re.findall(r'<li[^>]*>(.*?)</li>', match.group(1), re.DOTALL | re.IGNORECASE)
+        return '\\n'.join(f"• {item.strip()}" for item in items)
     
-    def replacer(match):
-        placeholders.append(match.group(0))
-        return f"\x00{len(placeholders)-1}\x00"
-
-    for tag in allowed:
-        # Protect opening tags (including attributes for <a>)
-        pattern_open = rf'<{tag}\b[^>]*>'
-        text = re.sub(pattern_open, replacer, text, flags=re.IGNORECASE)
-        
-        # Protect closing tags
-        pattern_close = rf'</{tag}>'
-        text = re.sub(pattern_close, replacer, text, flags=re.IGNORECASE)
+    # Process <ol>...</ol>
+    text = re.sub(r'<ol[^>]*>(.*?)</ol>', convert_ordered_list, text, flags=re.DOTALL | re.IGNORECASE)
+    # Process <ul>...</ul>
+    text = re.sub(r'<ul[^>]*>(.*?)</ul>', convert_unordered_list, text, flags=re.DOTALL | re.IGNORECASE)
     
-    # STEP 3: Escape ALL remaining HTML characters
-    # This safely neutralizes <script>, unknown tags, and unescaped chars
+    # Single <li> (if left outside lists)
+    text = re.sub(r'<li[^>]*>(.*?)</li>', r'• \1', text, flags=re.IGNORECASE)
+    
+    # 2. Convert headings <h1>-<h6> to <b>text</b>
+    text = re.sub(r'<h[1-6][^>]*>(.*?)</h[1-6]>', r'<b>\1</b>', text, flags=re.DOTALL | re.IGNORECASE)
+    
+    # 3. Replace <br>, <p> with newlines
+    text = re.sub(r'<br\s*/?>', '\\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</p>', '\\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<p[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<div[^>]*>', '\\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</div>', '\\n', text, flags=re.IGNORECASE)
+    
+    # 4. Remove other unsupported tags (but keep content!)
+    # Remove: <span>, <font>, <div>, etc.
+    text = re.sub(r'</?(?:span|font|div|section|article|header|footer)[^>]*>', '', text, flags=re.IGNORECASE)
+    
+    # 5. Keep only allowed Telegram tags: <b>, <i>, <u>, <code>, <pre>, <a>
+    allowed_pattern = r'</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|tg-spoiler)(?:\s+[^>]*)?>'
+    
+    # Find all allowed tags and temporarily escape them
+    allowed_tags = re.findall(allowed_pattern, text, re.IGNORECASE)
+    placeholders = {}
+    for i, tag in enumerate(allowed_tags):
+        placeholder = f"§§§{i}§§§"
+        placeholders[placeholder] = tag
+        text = text.replace(tag, placeholder, 1)
+    
+    # 6. Escape dangerous characters < > & in remaining text
     text = text.replace('&', '&amp;')
     text = text.replace('<', '&lt;')
     text = text.replace('>', '&gt;')
-    text = text.replace('"', '&quot;')
     
-    # STEP 4: Restore protections
-    for i, ph in enumerate(placeholders):
-        text = text.replace(f"\x00{i}\x00", ph)
+    # 7. Restore allowed tags (now safe)
+    for placeholder, tag in placeholders.items():
+        # Normalize tags to lowercase for Telegram
+        clean_tag = re.sub(r'<(/?)(\\w+)', lambda m: f"<{m.group(1)}{m.group(2).lower()}>", tag, flags=re.IGNORECASE)
+        # Handle strong->b, em->i replacements if needed, but Telegram supports strong/em too usually.
+        # Let's map strict telegram tags: strong->b, em->i for safety
+        clean_tag = clean_tag.replace('<strong>', '<b>').replace('</strong>', '</b>')
+        clean_tag = clean_tag.replace('<em>', '<i>').replace('</em>', '</i>')
+        text = text.replace(placeholder, clean_tag)
     
-    # STEP 5: Normalize whitespace (max 2 newlines)
-    text = re.sub(r'\n{3,}', '\n\n', text.strip())
+    # 8. Clean whitespace
+    lines = [line.rstrip() for line in text.split('\\n')]
+    text = '\\n'.join(line for line in lines if line.strip())
+    text = re.sub(r'\\n{3,}', '\\n\\n', text)
     
-    return text
+    return text.strip()
+
+
+def format_signal_plain(signal: dict) -> str:
+    """Fallback formatting without HTML (emojis and text only)"""
+    # Use helper to ensure valid price formatting if available, else raw
+    # Access _format_price from module scope
+    
+    lines = [
+        f"💎 {signal['symbol']} | M30 SNIPER",
+        f"💰 {_format_price(signal.get('current_price', signal.get('entry', 0)))}",
+        "─────────────────────────",
+        f"🎯 P-Score: {signal.get('p_score', 0)}/100",
+        f"🛡️ Kevlar: {'ПРОЙДЕН ✅' if signal.get('kevlar_passed') else 'БЛОКИРОВАН ❌'}",
+        f"{'🟢 LONG' if signal.get('side') == 'long' else '🔴 SHORT' if signal.get('side') == 'short' else '⚪ WAIT'}",
+        f"Вход:     {_format_price(signal.get('entry', 0))}",
+        f"Стоп:     🔴 {_format_price(signal.get('sl', 0))}",
+        f"TP1:      🟢 {_format_price(signal.get('tp1', 0))} (0.75x)",
+        f"TP2:      🟢 {_format_price(signal.get('tp2', 0))} (1.25x)",
+        f"TP3:      🟢 {_format_price(signal.get('tp3', 0))} (2.00x)",
+        "─────────────────────────",
+        f"⚠️ AI-анализ временно недоступен (ошибка форматирования)",
+        f"⚠️ Риск 1% | Лимитный ордер",
+    ]
+    return '\\n'.join(lines)
     if not text:
         return ""
 

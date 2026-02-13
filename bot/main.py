@@ -49,11 +49,11 @@ async def main() -> None:
     await init_user_db()
     await init_events_db() # Fix: Initialize events table
 from bot.prices import get_crypto_price, get_market_summary
-from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan, format_signal_html
+from bot.utils import encrypt_string, decrypt_string, batch_process
+from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan, format_signal_html, format_signal_plain
 from bot.validators import SymbolNormalizer, InvalidSymbolError
 from bot.prices import PriceUnavailableError
 from bot.logger import configure_logging  # Removed logger import to avoid circular dep or re-init
-from bot.utils import batch_process
 
 # --- CONFIGURATION ---
 from bot.config import Config
@@ -392,14 +392,9 @@ async def daily_manual_handler(message: Message) -> None:
             await message.answer(report, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.error(f"HTML formatting failed: {e}")
-            # Fallback: Send basic text if HTML fails
-            fallback_report = (
-                f"💎 {signal['symbol']} | M30 SNIPER\n"
-                f"🎯 P-Score: {signal.get('p_score', 'N/A')}\n"
-                f"⚠️ Full analysis unavailable (HTML Error).\n"
-                f"Entry: {signal.get('entry', 'N/A')}"
-            )
-            await message.answer(fallback_report)
+            # Fallback: Send plain text if HTML fails
+            fallback_report = format_signal_plain(signal)
+            await message.answer(fallback_report, parse_mode=None)
     except Exception as e:
         await message.answer(f"⚠️ Ошибка: {e}")
 
