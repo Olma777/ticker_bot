@@ -549,11 +549,20 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         strong_supports = [l for l in supports if l.get('score', 0) >= 1.0]
         strong_resists = [l for l in resistances if l.get('score', 0) >= 1.0]
         
+        # DIAGNOSTIC LOGGING
+        sup_info = [f"${l['price']}(Sc:{l.get('score',0)})" for l in supports]
+        res_info = [f"${l['price']}(Sc:{l.get('score',0)})" for l in resistances]
+        logger.info(f"📊 {ticker} STEP 4: p_score={p_score}, min_threshold={min_pscore_for_entry}")
+        logger.info(f"   All supports: {sup_info}")
+        logger.info(f"   All resists:  {res_info}")
+        logger.info(f"   Strong SUP (score>=1): {len(strong_supports)}, Strong RES: {len(strong_resists)}")
+        
         if p_score >= min_pscore_for_entry:
             # Check supports (LONG candidates)
             if strong_supports:
                 best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
                 dist = abs(price - best_support['price']) / price
+                logger.info(f"   Best SUP: ${best_support['price']} dist={dist*100:.1f}% (max 3%)")
                 if dist <= 0.03:  # 3% margin
                     direction = "LONG"
                     entry_level = best_support['price']
@@ -561,9 +570,15 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             if direction == "WAIT" and strong_resists:
                 best_resist = min(strong_resists, key=lambda x: abs(x['price'] - price))
                 dist = abs(price - best_resist['price']) / price
+                logger.info(f"   Best RES: ${best_resist['price']} dist={dist*100:.1f}% (max 3%)")
                 if dist <= 0.03:  # 3% margin
                     direction = "SHORT"
                     entry_level = best_resist['price']
+            
+            if direction == "WAIT":
+                logger.warning(f"   ❌ No level within 3% despite P-Score OK")
+        else:
+            logger.info(f"   ❌ P-Score {p_score} < {min_pscore_for_entry} → skipping level scan")
         
         # ============ STEP 4B: ANTI-TRAP (LONG at resistance / SHORT at support) ============
         if direction == "LONG" and strong_resists:
@@ -581,6 +596,8 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                 logger.warning(f"⚠️ ANTI-TRAP: SHORT blocked — price {price} too close to SUP {nearest_sup['price']} (Sc:{nearest_sup['score']})")
                 direction = "WAIT"
                 entry_level = 0.0
+        
+        logger.info(f"   DECISION: {direction} entry={entry_level}")
 
         # ============ STEP 5: KEVLAR CHECK (after levels for accurate distance) ============
         strat = indicators.get('strategy', {})
@@ -648,10 +665,24 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                     "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rrr": 0
                 }
         else:
-            # Явный возврат если нет направления - ЗДЕСЬ НЕТ ОШИБКИ direction
+            # Build detailed reason for diagnostics
+            reasons = []
+            if p_score < min_pscore_for_entry:
+                reasons.append(f"P-Score {p_score} < {min_pscore_for_entry}")
+            if not strong_supports and not strong_resists:
+                reasons.append("No strong levels (score >= 1.0)")
+            elif strong_supports or strong_resists:
+                all_strong = strong_supports + strong_resists
+                nearest = min(all_strong, key=lambda x: abs(x['price'] - price))
+                d = abs(nearest['price'] - price) / price * 100
+                reasons.append(f"Nearest strong level ${nearest['price']:.4f} @ {d:.1f}% (max 3%)")
+            
+            detail = "; ".join(reasons) if reasons else "Unknown"
+            logger.warning(f"⛔ {ticker} NO TRADE: {detail}")
+            
             return {
                 "status": "BLOCKED", 
-                "reason": "No valid setup found (Low Score or No Levels)", 
+                "reason": f"No valid setup: {detail}", 
                 "symbol": ticker,
                 "type": "WAIT",
                 "p_score": p_score,
