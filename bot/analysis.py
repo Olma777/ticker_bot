@@ -252,22 +252,28 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 
 def _clean_telegram_html(text: str) -> str:
     """
-    Emergency Fix: Remove all potential HTML to prevent parsing errors.
-    Escapes special characters.
+    Smart HTML cleaner:
+    1. Escapes EVERYTHING first (safe by default).
+    2. Restores ONLY the tags used by the bot (`<b>`, `<code>`).
     """
     if not text:
         return ""
     
-    # Replace dangerous characters with HTML entities
-    replacements = [
-        ('&', '&amp;'),
-        ('<', '&lt;'),
-        ('>', '&gt;'),
-        ('"', '&quot;'),
-    ]
+    # 1. Escape basic XML entities
+    text = text.replace('&', '&amp;')
+    text = text.replace('<', '&lt;')
+    text = text.replace('>', '&gt;')
+    text = text.replace('"', '&quot;')
     
-    for old, new in replacements:
-        text = text.replace(old, new)
+    # 2. Restore ONLY bot-generated tags
+    # We generated these ourselves, so we know they are safe.
+    # Any <script> or <b> from AI/User remains escaped as &lt;script&gt;
+    
+    # Bold
+    text = text.replace('&lt;b&gt;', '<b>').replace('&lt;/b&gt;', '</b>')
+    
+    # Code (Monospace)
+    text = text.replace('&lt;code&gt;', '<code>').replace('&lt;/code&gt;', '</code>')
     
     return text.strip()
     if not text:

@@ -105,6 +105,7 @@ class Config:
     """Runtime configuration with environment variables."""
     
     # --- INFRASTRUCTURE ---
+    DATA_DIR = DATA_DIR  # Expose module-level DATA_DIR to Config class
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
