@@ -15,8 +15,10 @@ def get_price_precision(price: float) -> int:
     
     if abs_price >= 10000:      # BTC, YFI
         return 0
-    elif abs_price >= 1:        # ETH, LINK, SOL -> Standard $12.34
+    elif abs_price >= 1000:     # ETH ($3000) -> 2 decimals
         return 2
+    elif abs_price >= 1:        # $1 - $1000 -> 3 decimals (User Request)
+        return 3
     elif abs_price >= 0.1:      # HBAR, VET -> $0.1234
         return 4
     elif abs_price >= 0.01:     # APE, CRO -> $0.0543

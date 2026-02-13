@@ -387,25 +387,24 @@ def validate_entry_for_any_ticker(
     if direction == "WAIT" or entry == 0:
         return False, "No entry signal"
 
-    # 1. Air Entry Check (Too far from current price)
-    # limit: 2 * ATR
-    dist = abs(entry - price)
-    limit = atr * 2.0
-    if dist > limit:
-        return False, f"Air Entry: Entry {entry} is too far from price {price} (> 2xATR)"
+    # 1. Price vs Entry Sanity
+    # dist = abs(entry - price)
+    # limit = atr * 2.0
+    # if dist > limit:
+    #    return False, f"Entry {entry} too far from price {price}"
 
-    # 2. Direction vs Level Type
+    # 2. Direction vs Level Type & Proximity
     if direction == "LONG":
         # Entry must be near a SUPPORT level
-        # Find nearest support
         if not supports:
             return False, "No support levels for LONG"
         
         nearest = min(supports, key=lambda x: abs(x['price'] - entry))
         
-        # Check if entry is "connected" to this support (within 0.5 ATR)
-        if abs(entry - nearest['price']) > atr * 0.5:
-             return False, f"LONG entry {entry} not aligned with nearest support {nearest['price']}"
+        # Rule: < 1% Distance from Level (Air Entry Protection)
+        dist_pct = abs(entry - nearest['price']) / entry
+        if dist_pct > 0.01:
+             return False, f"Air Entry: Too far from support ({dist_pct*100:.2f}% > 1%)"
              
         # Check Score
         if nearest.get('score', 0) < 1.0:
@@ -418,9 +417,10 @@ def validate_entry_for_any_ticker(
             
         nearest = min(resistances, key=lambda x: abs(x['price'] - entry))
         
-        # Check if entry is "connected" to this resistance
-        if abs(entry - nearest['price']) > atr * 0.5:
-             return False, f"SHORT entry {entry} not aligned with nearest resistance {nearest['price']}"
+        # Rule: < 1% Distance from Level
+        dist_pct = abs(entry - nearest['price']) / entry
+        if dist_pct > 0.01:
+             return False, f"Air Entry: Too far from resistance ({dist_pct*100:.2f}% > 1%)"
 
         # Check Score
         if nearest.get('score', 0) < 1.0:

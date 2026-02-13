@@ -284,7 +284,7 @@ def process_levels(df: pd.DataFrame) -> tuple[List[dict], List[dict]]:
         lvl['touches'] = touches
         
         # Score Formula v3.7
-        # Sc = (Wt * Touches) - (Wa * Age/100)
+        # Sc = (Wt * Touches) - (Wa * Age)
         # Note: Pine has complex reactivity. We approximate.
         
         score = (WT * touches) - (WA * age_bars)
@@ -585,7 +585,14 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         df['rsi'] = calculate_rsi(df)
         regime, safety = calculate_global_regime(btc_df)
         # Data Provider Abstraction (Webhook vs Local)
-        m30_sup, m30_res, lvl_source = await MarketDataProvider.get_levels(clean_ticker, df)
+        # Returns: supports, resistances, source, webhook_regime
+        m30_sup, m30_res, lvl_source, wh_regime = await MarketDataProvider.get_levels(clean_ticker, df)
+        
+        if wh_regime:
+             regime = wh_regime.get('state', "NEUTRAL")
+             safety = wh_regime.get('safety', "RISKY")
+             logger.info(f"✅ Using Webhook Regime: {regime} ({safety})")
+
         logger.info(f"✅ Levels Source: {lvl_source}")
         
         # Data Integrity Checks

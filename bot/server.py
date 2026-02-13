@@ -10,8 +10,8 @@ import hashlib
 import hmac
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
-from pydantic import BaseModel, field_validator
-from typing import Literal
+from pydantic import BaseModel, field_validator, Field
+from typing import Literal, Optional, Dict, Any, List
 
 from bot.config import Config
 from bot.prices import PriceAggregator
@@ -19,6 +19,7 @@ from datetime import datetime
 from bot.database import init_db, save_event
 from bot.decision_engine import process_signal
 from bot.notifier import send_card
+from bot.validators import SymbolNormalizer
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +52,11 @@ class TvPayload(BaseModel):
     atr: float
     zone_half: float
     score: float = Field(alias="sc")  # FIXED: Pine Script sends 'sc', we map to 'score'
-    regime: str
+    
+    # New Fields for v3.7 Sync (Source of Truth)
+    levels: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    regime: Optional[Dict[str, Any]] = None
+    
     # Optional fields or fields used in logic
     touches: int = 0
     
@@ -104,6 +109,15 @@ async def webhook_listener(
     if not x_ml_secret or not hmac.compare_digest(x_ml_secret, Config.WEBHOOK_SECRET):
         logger.warning("Auth failed")
         raise HTTPException(status_code=401, detail="Invalid Secret")
+
+    # 1.5 Symbol Normalization (Source of Truth)
+    try:
+        norm = SymbolNormalizer.normalize(payload.symbol)
+        payload.symbol = norm['binance'] # Force consistent format (e.g. APEUSDT)
+    except Exception as e:
+        logger.warning(f"Symbol normalization specific failed: {e}")
+        # Proceed with raw, analysis pipeline handles robustness
+
 
     # 2. Dedup ID Generation
     event_id = generate_event_id(payload)
