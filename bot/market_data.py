@@ -1,162 +1,151 @@
 """
-Market Data Component (Phase 2).
-Fetches FRESH data from Binance via CCXT.
-Calculates indicators using refactored math module.
-Updated to populate Candle Data.
+Market Data Component.
+Fetches OHLCV and calculates indicators (ATR, RSI, VWAP) via CCXT.
+Strictly deterministic, no AI guessing.
 """
 
 import logging
 import asyncio
-import pandas as pd
+from typing import Optional, List
+from datetime import datetime, timezone
+
 import ccxt.async_support as ccxt
-from typing import Optional
+import pandas as pd
+import numpy as n
 
-from bot.config import Config, EXCHANGE_OPTIONS, TRADING
+from bot.config import Config, EXCHANGE_OPTIONS
 from bot.decision_models import MarketContext
-from bot.models.market_context import MarketContext as DTOContext
-from bot.indicators import (
-    calculate_atr, 
-    calculate_rsi, 
-    calculate_vwap_24h,
-    calculate_global_regime,
-    fetch_funding_rate
-)
-from bot.prices import get_price
-from bot.prices import PriceAggregator, PriceUnavailableError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DecisionEngine-MarketData")
 
 
-async def fetch_ohlcv(
-    exchange: ccxt.Exchange, 
-    symbol: str, 
-    timeframe: str, 
-    limit: int
-) -> Optional[pd.DataFrame]:
-    """Fetch OHLCV data safely."""
-    try:
-        ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        if not ohlcv:
-            return None
-        df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
-        return df
-    except Exception as e:
-        logger.error(f"Error fetching {symbol}: {e}")
-        return None
-
-
-async def get_market_context(symbol: str) -> MarketContext:
+async def fetch_ohlcv(symbol: str, timeframe: str = "30m", limit: int = 100) -> pd.DataFrame:
     """
-    Fetch market context (Price, ATR, RSI, VWAP, Regime, Candle).
+    Fetch OHLCV data from Binance (or fallback).
+    Returns DataFrame with columns: timestamp, open, high, low, close, volume.
     """
-    # Initialize Exchange
+    # Default to Binance for consistency
     exchange_id = "binance"
     options = EXCHANGE_OPTIONS.get(exchange_id, {})
-    exchange_class = getattr(ccxt, exchange_id)
     
-    async with exchange_class(options) as exchange:
-        try:
-            # Parallel Fetch: Symbol M30 + BTC M30 (for Regime)
-            # Symbol format: Ensure UPPER/USDT
-            formatted_symbol = symbol.upper()
-            if "/" not in formatted_symbol:
-                formatted_symbol += "/USDT"
+    try:
+        exchange_class = getattr(ccxt, exchange_id)
+        async with exchange_class(options) as exchange:
+            ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             
-            # Fetch Tasks
-            target_task = fetch_ohlcv(exchange, formatted_symbol, TRADING.timeframe, 100)
-            btc_task = fetch_ohlcv(exchange, "BTC/USDT", TRADING.timeframe, 300) # Need more for Regime
+            df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            return df
             
-            df_target, df_btc = await asyncio.gather(target_task, btc_task)
-            
-            # Use Fallback if target data failed
-            if df_target is None or df_target.empty or len(df_target) < 50:
-                logger.warning(f"Insufficient data for {symbol}")
-                return MarketContext(
-                    price=0.0, atr=0.0, rsi=50.0, vwap=0.0, 
-                    regime="NEUTRAL", 
-                    candle_open=0.0, candle_high=0.0, candle_low=0.0, candle_close=0.0,
-                    data_quality="DEGRADED"
-                )
-
-            # Calculations
-            current_price = float(df_target['close'].iloc[-1])
-            candle = df_target.iloc[-1]
-            c_open = float(candle['open'])
-            c_high = float(candle['high'])
-            c_low = float(candle['low'])
-            c_close = float(candle['close'])
-            
-            # ATR
-            atr_series = calculate_atr(df_target)
-            atr = float(atr_series.iloc[-1])
-            
-            # RSI
-            rsi_series = calculate_rsi(df_target)
-            rsi = float(rsi_series.iloc[-1])
-            
-            # VWAP
-            vwap = calculate_vwap_24h(df_target)
-            
-            # Regime (BTC ROC)
-            regime_label, _ = calculate_global_regime(df_btc)
-            
-            # Data Quality Check
-            quality = "OK"
-            if atr == 0 or vwap == 0:
-                quality = "DEGRADED"
-
-            try:
-                aggregator = PriceAggregator()
-                fetched_price, _prov = await aggregator.get_price(symbol)
-                current_price = float(fetched_price)
-            except PriceUnavailableError:
-                pass
-
-            return MarketContext(
-                price=current_price,
-                atr=atr,
-                rsi=rsi,
-                vwap=vwap,
-                regime=regime_label,
-                candle_open=c_open,
-                candle_high=c_high,
-                candle_low=c_low,
-                candle_close=c_close,
-                data_quality=quality
-            )
-
-        except Exception as e:
-            logger.error(f"Market Context Error: {e}")
-            return MarketContext(
-                price=0.0, atr=0.0, rsi=50.0, vwap=0.0, 
-                regime="NEUTRAL",
-                candle_open=0.0, candle_high=0.0, candle_low=0.0, candle_close=0.0,
-                data_quality="DEGRADED"
-            )
+    except Exception as e:
+        logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
+        return pd.DataFrame()
 
 
-async def fetch_market_context(symbol: str) -> DTOContext:
-    s = symbol.upper()
-    if "/" not in s:
-        s = f"{s}/USDT"
-    price = await get_price(s)
-    exchange_id = "binance"
-    options = EXCHANGE_OPTIONS.get(exchange_id, {})
-    exchange_class = getattr(ccxt, exchange_id)
-    async with exchange_class(options) as exchange:
-        btc_df = await fetch_ohlcv(exchange, "BTC/USDT", TRADING.timeframe, 300)
-        df = await fetch_ohlcv(exchange, s, TRADING.timeframe, 150)
-        regime_label, _ = calculate_global_regime(btc_df) if btc_df is not None else ("NEUTRAL", None)
-        atr_val = float(calculate_atr(df).iloc[-1]) if df is not None else 0.0
-        vwap_val = calculate_vwap_24h(df) if df is not None else 0.0
-        funding = await fetch_funding_rate(exchange, s)
-    regime_map = {"EXPANSION": "bullish", "COMPRESSION": "bearish", "NEUTRAL": "neutral"}
-    btc_regime = regime_map.get(regime_label, "neutral")
-    return DTOContext(
-        symbol=s,
-        price=float(price),
-        btc_regime=btc_regime, 
-        atr=atr_val,
-        vwap=vwap_val if vwap_val != 0 else None,
-        funding_rate=funding
-    )
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """Calculate Relative ATR (Last value only)."""
+    if len(df) < period + 1:
+        return 0.0
+        
+    high_low = df["high"] - df["low"]
+    high_close = (df["high"] - df["close"].shift()).abs()
+    low_close = (df["low"] - df["close"].shift()).abs()
+    
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    
+    return float(atr.iloc[-1])
+
+
+def calculate_rsi(df: pd.DataFrame, period: int = 14) -> float:
+    """Calculate RSI (Last value only)."""
+    if len(df) < period + 1:
+        return 50.0
+        
+    delta = df["close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    return float(rsi.iloc[-1])
+
+
+def calculate_vwap(df: pd.DataFrame) -> float:
+    """
+    Calculate Rolling VWAP (Session).
+    Simulated as rolling 24h VWAP for simplicity if session data unavailable.
+    """
+    if df.empty:
+        return 0.0
+        
+    v = df["volume"]
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    
+    # Simple cumulative VWAP over loaded window (approx. 2 days for 100 M30 candles)
+    # Ideally should reset at session start, but rolling is acceptable proxy for trend
+    vwap = (tp * v).cumsum() / v.cumsum()
+    
+    return float(vwap.iloc[-1])
+
+
+def determine_regime(close: float, vwap: float) -> str:
+    """
+    Simple regime detection.
+    CLOSE > VWAP -> BULLISH_TREND
+    CLOSE < VWAP -> BEARISH_TREND
+    """
+    if close > vwap:
+        return "BULLISH_TREND"
+    return "BEARISH_TREND"
+
+
+async def load_market_context(symbol: str) -> MarketContext:
+    """
+    Loads market context.
+    If fails -> Returns DEGRADED context.
+    """
+    df = await fetch_ohlcv(symbol, limit=100)
+    
+    if df.empty or len(df) < 50:
+        logger.warning(f"Insufficient data for {symbol}")
+        return MarketContext(
+            price=0.0,
+            atr=0.0,
+            rsi=50.0,
+            vwap=0.0,
+            regime="UNKNOWN",
+            data_quality="DEGRADED"
+        )
+
+    try:
+        price = float(df["close"].iloc[-1])
+        atr = calculate_atr(df, period=Config.ATR_LEN)
+        rsi = calculate_rsi(df, period=14)
+        vwap = calculate_vwap(df)
+        regime = determine_regime(price, vwap)
+        
+        # Validation checks
+        if atr == 0 or vwap == 0:
+             raise ValueError("Indicator calculation failed")
+
+        return MarketContext(
+            price=price,
+            atr=atr,
+            rsi=rsi,
+            vwap=vwap,
+            regime=regime,
+            data_quality="OK"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing context for {symbol}: {e}")
+        return MarketContext(
+            price=0.0,
+            atr=0.0,
+            rsi=50.0,
+            vwap=0.0,
+            regime="UNKNOWN",
+            data_quality="DEGRADED"
+        )

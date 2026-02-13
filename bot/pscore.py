@@ -1,85 +1,99 @@
 """
-P-Score Engine - СИНХРОНИЗИРОВАНО с Pine v3.7
-Быстрая оценка вероятности для Decision Engine
+P-Score Engine.
+Calculates numerical score for trade quality.
+STRICT deterministic formula (P1-FIX-01/02).
 """
 
-from bot.config import Config
-from bot.decision_models import MarketContext, SentimentContext, PScoreResult
-from bot.cache import TieredCache
+from typing import Literal, Optional, List
 
-def calculate_score(
-    event: dict,
-    market: MarketContext,
-    sentiment: SentimentContext
+from bot.config import Config
+from bot.decision_models import (
+    MarketContext, 
+    SentimentContext, 
+    PScoreResult,
+    LevelGradeResult,
+    Regime
+)
+
+def score_level(sc: float) -> LevelGradeResult:
+    """
+    STRICT grading synced with Pine v3.7:
+      STRONG: sc >= 3.0  -> +15
+      MEDIUM: sc >= 1.0  ->  0
+      WEAK:   sc <  1.0  -> -20
+    NOTE: negative sc is always WEAK.
+    """
+    if sc >= 3.0:
+        return LevelGradeResult("STRONG", +15, f"Level: STRONG (sc={sc:.1f}) +15")
+    if sc >= 1.0:
+        return LevelGradeResult("MEDIUM", 0, f"Level: MEDIUM (sc={sc:.1f}) +0")
+    return LevelGradeResult("WEAK", -20, f"Level: WEAK (sc={sc:.1f}) -20")
+
+
+def calculate_pscore(
+    sc: float,
+    regime: Regime,
+    rsi: float,
+    is_support_event: bool,
+    data_quality_market: Literal["OK", "DEGRADED"],
+    data_quality_sentiment: Literal["OK", "DEGRADED"],
+    volume_high: Optional[bool] = None,  # P1 optional
 ) -> PScoreResult:
     """
-    Расчет P-Score (0-100)
-    УПРОЩЕННАЯ версия для мгновенных решений
+    P1 STRICT spec:
+      Base = 50
+      + Level delta (from score_level)
+      + Regime delta: EXPANSION +10, COMPRESSION -10, NEUTRAL 0
+      + RSI context: +5 ONLY if counter-trend at level:
+           Support event and RSI < 35  -> +5
+           Resistance event and RSI > 65 -> +5
+      + Data quality penalty: -15 if ANY of market/sentiment is DEGRADED
+      Volume: optional (keep None in P1 unless implemented deterministically)
     """
-    score = 50
-    breakdown = ["База: 50"]
-    
-    # 1. Сила уровня (из Pine Script)
-    sc = float(event.get('score', 0))
-    
-    # GHOST LEVEL - мгновенная блокировка
-    if sc < -10:
-        return PScoreResult(0, ["GHOST LEVEL: принудительный WAIT"])
-    
-    # STRONG LEVEL (SC >= 1.0) = +15
-    if sc >= 1.0:
-        score += 15
-        breakdown.append(f"Уровень STRONG 🟢 ({sc:.1f}): +15")
-    # WEAK LEVEL (SC < 0) = -20
-    elif sc < 0.0:
-        score -= 20
-        breakdown.append(f"Уровень WEAK 🔴 ({sc:.1f}): -20")
-    else:
-        breakdown.append(f"Уровень MEDIUM 🟡 ({sc:.1f}): 0")
-    
-    # 2. Режим BTC
-    if market.regime == "EXPANSION":
+    base = 50
+    breakdown = [f"Base: +50"]
+
+    lg = score_level(sc)
+    score = base + lg.delta
+    breakdown.append(lg.label)
+
+    # Regime
+    if regime == "EXPANSION":
         score += 10
-        breakdown.append("Режим EXPANSION: +10")
-    elif market.regime == "COMPRESSION":
+        breakdown.append("Regime: EXPANSION +10")
+    elif regime == "COMPRESSION":
         score -= 10
-        breakdown.append("Режим COMPRESSION: -10")
+        breakdown.append("Regime: COMPRESSION -10")
     else:
-        breakdown.append("Режим NEUTRAL: 0")
-    
-    # 3. Контекст RSI (только контртренд)
-    event_type = event.get('event', '')
-    is_support = "SUPPORT" in event_type
-    
-    if is_support and market.rsi < 35:
-        score += 5
-        breakdown.append(f"RSI Oversold ({market.rsi:.1f}): +5")
-    elif not is_support and market.rsi > 65:
-        score += 5
-        breakdown.append(f"RSI Overbought ({market.rsi:.1f}): +5")
-    
-    # 4. HOT sentiment (высокий OI)
-    if sentiment.is_hot:
+        breakdown.append("Regime: NEUTRAL +0")
+
+    # RSI Context (counter-trend only)
+    rsi_delta = 0
+    if is_support_event and rsi < 35:
+        rsi_delta = +5
+        breakdown.append(f"RSI: Counter-trend (RSI={rsi:.1f} < 35) +5")
+    elif (not is_support_event) and rsi > 65:
+        rsi_delta = +5
+        breakdown.append(f"RSI: Counter-trend (RSI={rsi:.1f} > 65) +5")
+    else:
+        breakdown.append(f"RSI: Neutral (RSI={rsi:.1f}) +0")
+    score += rsi_delta
+
+    # Data quality
+    if data_quality_market == "DEGRADED" or data_quality_sentiment == "DEGRADED":
+        score -= 15
+        breakdown.append("Data Quality: DEGRADED -15")
+    else:
+        breakdown.append("Data Quality: OK +0")
+
+    # Volume (optional)
+    if volume_high is True:
         score += 10
-        breakdown.append("Sentiment HOT: +10")
-    else:
-        score -= 5
-        breakdown.append("Sentiment COLD: -5")
-    
-    # Клиппинг 0-100
-    score = max(0, min(100, int(score)))
-    
-    return PScoreResult(score, breakdown)
+        breakdown.append("Volume: HIGH +10")
+    elif volume_high is False:
+        score -= 10
+        breakdown.append("Volume: LOW -10")
 
-# Tiered Cache: P-Score
-_ps_cache = TieredCache()
-
-async def _original_fetch_logic(symbol: str):
-    raise NotImplementedError("Provide original P-Score fetch logic")
-
-async def get_pscore(symbol: str):
-    return await _ps_cache.get_or_set(
-        f"pscore:{symbol}",
-        lambda: _original_fetch_logic(symbol),
-        "pscore"
-    )
+    # Clamp to [0,100]
+    score = max(0, min(100, int(round(score))))
+    return PScoreResult(score=score, breakdown=breakdown)

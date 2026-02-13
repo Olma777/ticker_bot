@@ -1,95 +1,20 @@
 """
-Technical indicators module (Math Only + Legacy Compatibility).
-Refactored for Phase 2: Math functions.
-Legacy Compatibility: Restored logic for /sniper command.
+Technical indicators module with centralized configuration.
 """
 
 import logging
 import asyncio
-import pandas as pd
-import numpy as np
-import ccxt.async_support as ccxt
-from typing import Optional, Any, List
+from typing import Optional, Any
 from dataclasses import dataclass
 
-from bot.config import TRADING, EXCHANGE_OPTIONS, Config
-from bot.models.market_context import Candle
-from bot.validators import SymbolNormalizer
-from bot.data_provider import MarketDataProvider
+import ccxt.async_support as ccxt
+import pandas as pd
+import numpy as np
+
+from bot.config import TRADING, EXCHANGE_OPTIONS
 
 logger = logging.getLogger(__name__)
 
-
-# --- PHASE 2 MATH FUNCTIONS ---
-
-def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Calculate Average True Range."""
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.rolling(window=period).mean()
-
-
-def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Calculate Relative Strength Index."""
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-
-def calculate_vwap_24h(df: pd.DataFrame) -> float:
-    """Calculate 24h Volume Weighted Average Price."""
-    if len(df) < 48:
-        return float(df['close'].mean())
-    last_24h = df.tail(48)
-    vwap = (last_24h['close'] * last_24h['volume']).sum() / last_24h['volume'].sum()
-    return float(vwap)
-
-
-def calculate_global_regime(btc_df: Optional[pd.DataFrame]) -> tuple[str, str]:
-    """
-    Calculate global market regime based on BTC ROC (Rate of Change).
-    Logic from Phase 1 (Approved for Phase 2).
-    Returns: (regime, safety_label)
-    Regime: "EXPANSION", "COMPRESSION", "NEUTRAL"
-    """
-    if btc_df is None or btc_df.empty or len(btc_df) < TRADING.z_win:
-        return "NEUTRAL", "SAFE"
-    
-    # ROC 30 periods
-    roc = btc_df['close'].pct_change(30)
-    if roc.isna().all():
-        return "NEUTRAL", "SAFE"
-    
-    mean = roc.rolling(window=TRADING.z_win).mean()
-    std = roc.rolling(window=TRADING.z_win).std()
-    
-    if std.iloc[-1] == 0 or pd.isna(std.iloc[-1]):
-        return "NEUTRAL", "SAFE"
-    
-    z_score = (roc - mean) / std
-    current_z = z_score.iloc[-1]
-    
-    if pd.isna(current_z):
-        return "NEUTRAL", "SAFE"
-    
-    if current_z > TRADING.z_thr:
-        return "COMPRESSION", "RISKY"
-    elif current_z < -TRADING.z_thr:
-        return "EXPANSION", "SAFE"
-    
-    return "NEUTRAL", "SAFE"
-
-
-def calculate_volatility_bands(current_price: float, atr: float) -> tuple[float, float]:
-    """Calculate volatility bands based on ATR."""
-    return current_price - (atr * 2.0), current_price + (atr * 2.0)
-
-
-# --- LEGACY COMPATIBILITY LAYER (For /sniper command) ---
 
 @dataclass
 class Level:
@@ -156,185 +81,165 @@ async def fetch_open_interest(exchange: ccxt.Exchange, symbol: str) -> float:
         return 0.0
 
 
-def process_levels(df: pd.DataFrame) -> tuple[List[dict], List[dict]]:
-    """
-    Process support and resistance levels (Legacy for /sniper).
-    Synchronized with Pine Script v3.7 Logic.
-    """
-    if df is None or df.empty:
-        return [], []
-        
-    # === SYNCHRONIZE WITH PINE SCRIPT v3.7 ===
-    from bot.config import Config
-    
-    # Use EXACT same parameters as Pine Script
-    REACT_BARS = Config.REACT_BARS        # 24 (из Pine: reactBars = 24)
-    K_REACT = Config.K_REACT              # 1.3 (из Pine: kReact = 1.30)
-    MERGE_ATR = Config.MERGE_ATR          # 0.6 (из Pine: mergeATR = 0.60)
-    WT = Config.WT_TOUCH                  # 1.0 (из Pine: Wt = 1.0)
-    WA = Config.WA_DECAY                  # 0.35 (из Pine: Wa = 0.35)
-    TMIN = Config.TMIN                    # 5 (из Pine: Tmin = 5)
-    ZONE_WIDTH_MULT = Config.ZONE_WIDTH_MULT  # 0.5 (из Pine: zoneWidthMult = 0.5)
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Calculate Average True Range."""
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
 
-    closes = df['close'].values
-    highs = df['high'].values
-    lows = df['low'].values
-    atrs = df['atr'].values
-    
-    levels = []
-    
-    # 1. Pivot Detection (Pivots High/Low)
-    # Pine: leftBars=4, rightBars=4 (FIXED from 10)
-    left_bars = 4
-    right_bars = 4
-    
-    for i in range(left_bars, len(df) - right_bars):
-        # Pivot High
-        is_ph = True
-        for k in range(1, left_bars + 1):
-            if highs[i] <= highs[i-k]:
-                is_ph = False; break
-        if is_ph:
-            for k in range(1, right_bars + 1):
-                if highs[i] <= highs[i+k]:
-                    is_ph = False; break
-        
-        # Pivot Low
-        is_pl = True
-        for k in range(1, left_bars + 1):
-            if lows[i] >= lows[i-k]:
-                is_pl = False; break
-        if is_pl:
-            for k in range(1, right_bars + 1):
-                if lows[i] >= lows[i+k]:
-                    is_pl = False; break
-                    
-        if is_ph:
-            levels.append({
-                'price': highs[i], 'type': 'RESISTANCE', 'index': i,
-                'age': 0, 'touches': 0, 'score': 0.0, 'atr': atrs[i]
-            })
-        if is_pl:
-            levels.append({
-                'price': lows[i], 'type': 'SUPPORT', 'index': i,
-                'age': 0, 'touches': 0, 'score': 0.0, 'atr': atrs[i]
-            })
 
-    # ... (rest of process_levels unchanged) ...
-    # Wait, I need to keep the function structure intact. 
-    # I will replace the fetch_ohlcv_data calls and logging in get_technical_indicators too.
+def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Calculate Relative Strength Index."""
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+
+def calculate_vwap_24h(df: pd.DataFrame) -> float:
+    """Calculate 24h Volume Weighted Average Price."""
+    if len(df) < 48:
+        return df['close'].mean()
+    last_24h = df.tail(48)
+    vwap = (last_24h['close'] * last_24h['volume']).sum() / last_24h['volume'].sum()
+    return vwap
+
+
+def calculate_global_regime(btc_df: Optional[pd.DataFrame]) -> tuple[str, str]:
+    """Calculate global market regime based on BTC."""
+    if btc_df is None or btc_df.empty or len(btc_df) < TRADING.z_win:
+        return "NEUTRAL", "SAFE"
     
-    # 2. Filter & Merge
-    # Pine: Merge if dist < mergeATR * ATR
-    merged_levels = []
-    sorted_levels = sorted(levels, key=lambda x: x['price'])
+    roc = btc_df['close'].pct_change(30)
+    if roc.isna().all():
+        return "NEUTRAL", "SAFE"
     
-    current_cluster = []
+    mean = roc.rolling(window=TRADING.z_win).mean()
+    std = roc.rolling(window=TRADING.z_win).std()
     
-    for lvl in sorted_levels:
-        if not current_cluster:
-            current_cluster.append(lvl)
+    if std.iloc[-1] == 0 or pd.isna(std.iloc[-1]):
+        return "NEUTRAL", "SAFE"
+    
+    z_score = (roc - mean) / std
+    current_z = z_score.iloc[-1]
+    
+    if pd.isna(current_z):
+        return "NEUTRAL", "SAFE"
+    
+    if current_z > TRADING.z_thr:
+        return "COMPRESSION", "RISKY"
+    elif current_z < -TRADING.z_thr:
+        return "EXPANSION", "SAFE"
+    return "NEUTRAL", "SAFE"
+
+
+def process_levels(
+    df: pd.DataFrame, 
+    max_dist_pct: float = 30.0
+) -> tuple[list[dict], list[dict]]:
+    """Process OHLCV data to find support/resistance levels."""
+    levels: list[Level] = []
+    pending: list[dict] = []
+    
+    if 'atr' not in df.columns:
+        df['atr'] = calculate_atr(df)
+    
+    atr = df['atr'].values
+    high = df['high'].values
+    low = df['low'].values
+    L, R = 4, 4
+    start_idx = max(TRADING.atr_len, L + R)
+    
+    for i in range(start_idx, len(df) - R):
+        if np.isnan(atr[i]):
             continue
-            
-        last_lvl = current_cluster[-1]
-        dist = abs(lvl['price'] - last_lvl['price'])
-        limit_dist = MERGE_ATR * last_lvl['atr']  # UPDATED
         
-        if dist <= limit_dist:
-            current_cluster.append(lvl)
-        else:
-            # Merge cluster
-            avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
-            best_lvl = max(current_cluster, key=lambda x: x['index']) # Most recent
-            best_lvl['price'] = avg_price
-            merged_levels.append(best_lvl)
-            current_cluster = [lvl]
-            
-    if current_cluster:
-        avg_price = sum(l['price'] for l in current_cluster) / len(current_cluster)
-        best_lvl = max(current_cluster, key=lambda x: x['index'])
-        best_lvl['price'] = avg_price
-        merged_levels.append(best_lvl)
+        is_pivot_h = True
+        is_pivot_l = True
         
-    # 3. Calculate Score (Pine Logic v3.7)
-    final_levels = []
-    current_idx = len(df) - 1
-    for lvl in merged_levels:
-        age_bars = current_idx - lvl['index']
+        for j in range(1, L + 1):
+            if high[i] < high[i-j] or high[i] < high[i+j]:
+                is_pivot_h = False
+            if low[i] > low[i-j] or low[i] > low[i+j]:
+                is_pivot_l = False
         
-        # Pine: kReact * age
-        reaction_threshold = K_REACT * age_bars  # UPDATED
-        # Pine: reactBars limit
-        if age_bars > REACT_BARS and lvl['touches'] == 0: # Simple dormancy check
-             pass # In Pine score decays, here we just keep calculating
+        if is_pivot_h:
+            pending.append({
+                'idx': i, 'price': high[i], 'is_res': True, 
+                'atr': atr[i], 'check_at': i + TRADING.react_bars
+            })
+        if is_pivot_l:
+            pending.append({
+                'idx': i, 'price': low[i], 'is_res': False, 
+                'atr': atr[i], 'check_at': i + TRADING.react_bars
+            })
         
-        # Calculate Touches & Reactivity
-        # For simplicity in Python we iterate from lvl index
-        touches = 0
-        volume_sum = 0
-        
-        for k in range(lvl['index'] + 1, len(df)):
-            c = closes[k]
-            # Simple Touch check: within ZoneWidthMult * ATR
-            dist = abs(c - lvl['price'])
-            zone = atrs[k] * ZONE_WIDTH_MULT # UPDATED
-            if dist <= zone:
-                touches += 1
+        active_pending: list[dict] = []
+        for p in pending:
+            if i >= p['check_at']:
+                reaction_dist = TRADING.k_react * p['atr']
+                confirmed = False
+                window_low = np.min(low[p['idx']:i+1])
+                window_high = np.max(high[p['idx']:i+1])
                 
-        lvl['touches'] = touches
-        
-        # Score Formula v3.7
-        # Sc = (Wt * Touches) - (Wa * Age)
-        # Note: Pine has complex reactivity. We approximate.
-        
-        score = (WT * touches) - (WA * age_bars)
-        
-        # Clamp Score (Pine Script Compatibility)
-        score = max(-100.0, min(10.0, score))
-        
-        if age_bars < TMIN:
-            score = 0 # Newborn
-            
-        lvl['score'] = score
-        lvl['age'] = age_bars
-        
-        final_levels.append(lvl)
+                if p['is_res']:
+                    if (p['price'] - window_low) >= reaction_dist:
+                        confirmed = True
+                else:
+                    if (window_high - p['price']) >= reaction_dist:
+                        confirmed = True
+                
+                if confirmed:
+                    merged = False
+                    merge_tol = TRADING.merge_atr * p['atr']
+                    for lvl in levels:
+                        if lvl.is_res == p['is_res'] and abs(lvl.price - p['price']) < merge_tol:
+                            lvl.update(p['price'], p['atr'], i)
+                            merged = True
+                            break
+                    if not merged:
+                        levels.append(Level(
+                            price=p['price'],
+                            is_res=p['is_res'],
+                            atr=p['atr'],
+                            touches=1,
+                            last_touch_idx=i,
+                            created_at=i
+                        ))
+            else:
+                active_pending.append(p)
+        pending = active_pending
 
-    # Separate based on PIVOT type (initial)
-    supports = [l for l in final_levels if l['type'] == 'SUPPORT']
-    resistances = [l for l in final_levels if l['type'] == 'RESISTANCE']
-    
-    # Filter by Distance (Anti-Hallucination)
+    current_idx = len(df) - 1
     current_price = df['close'].iloc[-1]
-    max_dist = current_price * (Config.MAX_DIST_PCT / 100.0)
+    active_supports: list[dict] = []
+    active_resistances: list[dict] = []
     
-    supports = [s for s in supports if abs(s['price'] - current_price) <= max_dist]
-    resistances = [r for r in resistances if abs(r['price'] - current_price) <= max_dist]
+    for lvl in levels:
+        score = lvl.get_score(current_idx, current_price)
+        dist_pct = abs(lvl.price - current_price) / current_price * 100
+        if dist_pct > max_dist_pct:
+            continue
+        data = {'price': lvl.price, 'score': score}
+        if lvl.is_res and lvl.price > current_price:
+            active_resistances.append(data)
+        elif not lvl.is_res and lvl.price < current_price:
+            active_supports.append(data)
     
-    # P0 FIX: Reclassify Levels based on Current Price (Dynamic Validation)
-    # A pivot low above current price is RESISTANCE, not support.
-    # A pivot high below current price is SUPPORT, not resistance.
-    
-    all_valid_levels = supports + resistances
-    final_supports = []
-    final_resistances = []
-    
-    for lvl in all_valid_levels:
-        if lvl['price'] < current_price:
-            lvl['type'] = 'SUPPORT'
-            final_supports.append(lvl)
-        elif lvl['price'] > current_price:
-            lvl['type'] = 'RESISTANCE'
-            final_resistances.append(lvl)
-    
-    # Sort by Score (Desc)
-    final_supports.sort(key=lambda x: x['score'], reverse=True)
-    final_resistances.sort(key=lambda x: x['score'], reverse=True)
-    
-    return final_supports[:3], final_resistances[:3]
+    active_supports.sort(key=lambda x: abs(x['price'] - current_price))
+    active_resistances.sort(key=lambda x: abs(x['price'] - current_price))
+    return active_supports[:3], active_resistances[:3]
 
 
-def calculate_legacy_p_score(
+def calculate_volatility_bands(current_price: float, atr: float) -> tuple[float, float]:
+    """Calculate volatility bands based on ATR."""
+    return current_price - (atr * 2.0), current_price + (atr * 2.0)
+
+
+def calculate_p_score(
     regime: str, 
     rsi: float, 
     s1_score: float, 
@@ -343,7 +248,7 @@ def calculate_legacy_p_score(
     s1: float, 
     r1: float
 ) -> tuple[int, str, bool]:
-    """Calculate probability score (Legacy)."""
+    """Calculate probability score for trade setup."""
     score = 50
     details = ["• База: 50%"]
     
@@ -368,6 +273,7 @@ def calculate_legacy_p_score(
         is_support_target = False
         lvl_type = "Resistance"
     
+    # TOLERANCE PATCH: > -2.0 is OKAY
     if target_score >= 1.0:
         score += 15
         details.append(f"• Уровень ({lvl_type}): +15% (Strong Score {target_score:.1f})")
@@ -377,18 +283,11 @@ def calculate_legacy_p_score(
         score -= 20
         details.append(f"• Уровень ({lvl_type}): -20% (Weak Score {target_score:.1f})")
     
-    # RSI Context (FIXED: Bonus ONLY for counter-trend extremes)
-    rsi_bonus = 0
-    if is_support_target and rsi < 35:
-        rsi_bonus = 5
-        details.append("• RSI Контекст: +5% (Oversold Support)")
-    elif not is_support_target and rsi > 65:
-        rsi_bonus = 5
-        details.append("• RSI Контекст: +5% (Overbought Resistance)")
+    if (is_support_target and rsi < 35) or (not is_support_target and rsi > 65):
+        score += 5
+        details.append("• RSI Контекст: +5% (Контртренд)")
     else:
         details.append("• RSI Контекст: 0% (Нейтрально)")
-    
-    score += rsi_bonus
     
     final_score = max(0, min(100, int(score)))
     return final_score, "\n".join(details), is_support_target
@@ -407,11 +306,8 @@ def get_intraday_strategy(
     capital: float = 1000.0, 
     risk_percent: float = 1.0
 ) -> dict[str, Any]:
-    """Generate intraday trading strategy (Legacy)."""
+    """Generate intraday trading strategy."""
     
-    from bot.order_calc import build_order_plan
-    from bot.config import Config
-
     def empty_response(reason: str) -> dict[str, Any]:
         return {
             "action": "WAIT", "reason": reason,
@@ -421,7 +317,10 @@ def get_intraday_strategy(
 
     if p_score < 35:
         return empty_response(f"Strategy Score {p_score}% низкий (нужно >35%).")
-    # REMOVED: Incorrect RSI checks that caused false WAIT signals (User Request)
+    if is_sup_target and rsi > 70:
+        return empty_response("RSI > 70 у поддержки (Overbought).")
+    if not is_sup_target and rsi < 30:
+        return empty_response("RSI < 30 у сопротивления (Oversold).")
 
     funding_threshold = 0.0003
     if funding > funding_threshold and is_sup_target and current_price < vwap:
@@ -429,237 +328,72 @@ def get_intraday_strategy(
     if funding < -funding_threshold and not is_sup_target and current_price > vwap:
         return empty_response(f"Sentiment Trap: Фандинг отрицательный ({(funding*100):.3f}%) + Цена > VWAP.")
 
-    # Determine side and level
-    side = "LONG" if is_sup_target else "SHORT"
-    level = s1 if is_sup_target else r1
+    stop_buffer = atr * 1.5
+    if is_sup_target:
+        action = "LONG"
+        entry = s1
+        stop = s1 - stop_buffer
+        dist = abs(r1 - s1)
+        tp1 = entry + (dist * 0.3)
+        tp2 = entry + (dist * 0.6)
+        tp3 = r1 - (atr * 0.2)
+    else:
+        action = "SHORT"
+        entry = r1
+        stop = r1 + stop_buffer
+        dist = abs(r1 - s1)
+        tp1 = entry - (dist * 0.3)
+        tp2 = entry - (dist * 0.6)
+        tp3 = s1 + (atr * 0.2)
+
+    risk_amount_usd = capital * (risk_percent / 100.0)
+    price_diff = abs(entry - stop)
     
-    # Calculate zone_half (estimate from ATR if not available)
-    zone_half = atr * Config.ZONE_WIDTH_MULT
-    
-    # CALL SINGLE SOURCE OF TRUTH
-    order_plan = build_order_plan(
-        side=side,
-        level=level,
-        zone_half=zone_half,
-        atr=atr,
-        capital=capital,
-        risk_pct=risk_percent,
-        lot_step=None
-    )
-    
-    if order_plan.reason_blocked:
-        return empty_response(f"Order Calc: {order_plan.reason_blocked}")
-    
-    # Format response
+    if price_diff > 0 and entry > 0:
+        position_size = risk_amount_usd / price_diff
+        risk_pct_distance = (price_diff / entry) * 100
+        potential_profit = abs(tp3 - entry)
+        rrr = potential_profit / price_diff
+    else:
+        position_size = 0
+        risk_pct_distance = 0
+        rrr = 0
+
     return {
-        "action": "TRADE",
-        "reason": f"Setup Valid. Score: {p_score}%. RRR: 1:{order_plan.rrr_tp2:.1f}",
-        "entry": order_plan.entry,
-        "stop": order_plan.stop_loss,
-        "tp1": order_plan.tp1,
-        "tp2": order_plan.tp2,
-        "tp3": order_plan.tp3,
-        "risk_pct": round((order_plan.stop_dist / order_plan.entry * 100) if order_plan.entry > 0 else 0, 2),
-        "position_size": order_plan.size_units,
-        "risk_amount": round(order_plan.risk_amount, 2),
-        "rrr": round(order_plan.rrr_tp2, 1),
-        "side": side
+        "action": action,
+        "reason": f"Setup Valid. Score: {p_score}%. RRR: 1:{rrr:.1f}",
+        "entry": entry, "stop": stop, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "risk_pct": round(risk_pct_distance, 2),
+        "position_size": position_size,
+        "risk_amount": round(risk_amount_usd, 2),
+        "rrr": round(rrr, 1)
     }
 
 
-
-async def diagnose_pivot_detection(df: pd.DataFrame) -> None:
-    """Diagnose why pivots are not found."""
-    logger.info("🔍 PIVOT DETECTION DIAGNOSTICS")
-    
-    highs = df['high'].values
-    lows = df['low'].values
-    
-    # HARDCODED CONFIG CHECK
-    left_bars = 4
-    right_bars = 4
-    
-    pivots_high = 0
-    pivots_low = 0
-    
-    for i in range(left_bars, len(df) - right_bars):
-        # Check Pivot High
-        is_ph = True
-        for k in range(1, left_bars + 1):
-            if highs[i] <= highs[i-k]:
-                is_ph = False; break
-        if is_ph:
-            for k in range(1, right_bars + 1):
-                if highs[i] <= highs[i+k]:
-                    is_ph = False; break
-        if is_ph:
-            pivots_high += 1
-            if pivots_high <= 5: # Log first 5 only
-                logger.info(f"   Pivot High at index {i}, price: ${highs[i]:.2f}")
-        
-        # Check Pivot Low
-        is_pl = True
-        for k in range(1, left_bars + 1):
-            if lows[i] >= lows[i-k]:
-                is_pl = False; break
-        if is_pl:
-            for k in range(1, right_bars + 1):
-                if lows[i] >= lows[i+k]:
-                    is_pl = False; break
-        if is_pl:
-            pivots_low += 1
-            if pivots_low <= 5:
-                 logger.info(f"   Pivot Low at index {i}, price: ${lows[i]:.2f}")
-    
-    logger.info(f"✅ Total pivots high: {pivots_high}")
-    logger.info(f"✅ Total pivots low: {pivots_low}")
-    
-    if pivots_high == 0 and pivots_low == 0:
-        logger.error("❌ ZERO PIVOTS DETECTED — Check left_bars/right_bars parameters")
-        logger.error(f"   Current: left_bars={left_bars}, right_bars={right_bars}")
-        logger.error(f"   Data range: {len(df)} candles")
-        logger.error(f"   Price range: ${min(lows):.2f} — ${max(highs):.2f}")
-
-
 async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
-    """Get all technical indicators for a ticker (Legacy for /sniper)."""
+    """Get all technical indicators for a ticker."""
     exchange = ccxt.binance(EXCHANGE_OPTIONS["binance"])
     
     try:
-        # P0 FIX: Enforce 30m timeframe strict
-        timeframe = "30m"
-        
-        # Normalize Ticker
-        norm = SymbolNormalizer.normalize(ticker)
-        clean_ticker = norm['base']
-        pair = norm['ccxt']
-        
-        logger.info(f"🔍 FETCHING {pair} 30m data from Binance...")
-        
         # Fetch data in parallel
-        m30_task = fetch_ohlcv_data(exchange, pair, timeframe, limit=1500)
-        btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", timeframe, limit=1500)
-        funding_task = fetch_funding_rate(exchange, pair)
-        oi_task = fetch_open_interest(exchange, pair)
-        # P0 FIX: Fetch Real-Time Ticker for accurate price
-        ticker_task = exchange.fetch_ticker(pair)
+        m30_task = fetch_ohlcv_data(exchange, f"{ticker.upper()}/USDT", TRADING.timeframe, limit=1500)
+        btc_task = fetch_ohlcv_data(exchange, "BTC/USDT", TRADING.timeframe, limit=1500)
+        funding_task = fetch_funding_rate(exchange, f"{ticker.upper()}/USDT")
+        oi_task = fetch_open_interest(exchange, f"{ticker.upper()}/USDT")
 
-        df, btc_df, funding_rate, open_interest, ticker_data = await asyncio.gather(
-            m30_task, btc_task, funding_task, oi_task, ticker_task
+        df, btc_df, funding_rate, open_interest = await asyncio.gather(
+            m30_task, btc_task, funding_task, oi_task
         )
         
-        # === DIAGNOSTICS FOR DATA INTEGRITY ===
-        logger.info("=" * 60)
-        logger.info(f"📊 DIAGNOSTICS FOR {pair}")
-        logger.info("=" * 60)
-         
-        # P0 FIX: Real-time price from ticker
-        current_price = float(ticker_data['last']) if ticker_data else df['close'].iloc[-1]
-        logger.info(f"✅ Real-Time Price (Ticker): ${current_price}")
-
-        if df is None:
-            logger.error(f"❌ NO DATA: fetch_ohlcv_data returned None for {ticker}")
+        if df is None or df.empty:
             return None
-        
-        if df.empty:
-            logger.error(f"❌ EMPTY DF: DataFrame is empty for {ticker}")
-            return None
-            
-        logger.info(f"✅ df shape: {df.shape}")
-        
-        if len(df) < 100:
-            logger.error(f"❌ INSUFFICIENT DATA: Only {len(df)} candles for {ticker}, need ≥100")
-            return None
-
-        # P0 FIX: Verify Timeframe
-        if len(df) >= 2:
-            time_diff = df['time'].iloc[-1] - df['time'].iloc[-2]
-            time_diff_min = time_diff / 60000
-            logger.info(f"✅ Timeframe: {time_diff_min:.0f} minutes between last 2 candles")
-            if abs(time_diff_min - 30) > 1:
-                logger.error(f"❌ WRONG TIMEFRAME! Expected 30m, got {time_diff_min:.0f}m")
-            else:
-                 logger.info(f"✅ Timeframe verified: 30m")
 
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
         regime, safety = calculate_global_regime(btc_df)
-        # Data Provider Abstraction (Webhook vs Local)
-        # Returns: supports, resistances, source, webhook_regime
-        m30_sup, m30_res, lvl_source, wh_regime = await MarketDataProvider.get_levels(clean_ticker, df)
+        m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
         
-        if wh_regime:
-             regime = wh_regime.get('state', "NEUTRAL")
-             safety = wh_regime.get('safety', "RISKY")
-             logger.info(f"✅ Using Webhook Regime: {regime} ({safety})")
-
-        logger.info(f"✅ Levels Source: {lvl_source}")
-        
-        # Data Integrity Checks
-        logger.info(f"✅ Current price: ${current_price:.2f}")
-
-        # Check 5 candles ago for K2_NO_BRAKES
-        if len(df) >= 5:
-            price_5_ago = df['close'].iloc[-5]
-            change_5 = ((current_price / price_5_ago) - 1) * 100 # Use real price
-            logger.info(f"✅ Price 5 candles ago: ${price_5_ago:.2f}")
-            logger.info(f"✅ Change over 5 candles: {change_5:.1f}%")
-            if change_5 < -3.0:
-                logger.warning(f"⚠️ Would trigger K2_NO_BRAKES (Falling Knife: {change_5:.1f}%)")
-
-        # === LEVEL DIAGNOSTICS ===
-        logger.info(f"✅ Supports found: {len(m30_sup)}")
-        logger.info(f"✅ Resistances found: {len(m30_res)}")
-        if m30_sup:
-            logger.info(f"   Top support: ${m30_sup[0]['price']:.2f} (score: {m30_sup[0]['score']:.1f})")
-        if m30_res:
-            logger.info(f"   Top resistance: ${m30_res[0]['price']:.2f} (score: {m30_res[0]['score']:.1f})")
-            
-        if not m30_sup and not m30_res:
-            logger.error("❌ NO LEVELS FOUND — PIVOT DETECTION FAILED")
-            await diagnose_pivot_detection(df)
-        
-        logger.info("=" * 60)
-        
-        # === LEVEL DIAGNOSTICS (P0 FIX) ===
-        logger.info(f"📊 LEVELS DETECTED: {len(m30_sup)} supports, {len(m30_res)} resistances")
-        if m30_sup:
-            logger.info(f"   Top support: ${m30_sup[0]['price']:.2f} (score: {m30_sup[0]['score']:.1f})")
-        if m30_res:
-            logger.info(f"   Top resistance: ${m30_res[0]['price']:.2f} (score: {m30_res[0]['score']:.1f})")
-            
-        if not m30_sup and not m30_res:
-            logger.warning("⚠️ NO LEVELS FOUND! Check pivot detection and merge logic.")
-        
-        
-        # Log basics
-        earliest = df['time'].iloc[0]
-        latest = df['time'].iloc[-1]
-        span_hours = (latest - earliest) / (1000 * 60 * 60)
-        logger.info(f"✅ Received {len(df)} candles spanning {span_hours:.1f} hours")
-        logger.info(f"   Current price: ${current_price:.2f}")
-
-        # P1 FIX: Reclassify Levels based on Current Price
-        all_levels = m30_sup + m30_res
-        
-        real_supports = []
-        real_resistances = []
-        
-        for lvl in all_levels:
-            if lvl['price'] < current_price:
-                lvl['type'] = 'SUPPORT'
-                real_supports.append(lvl)
-            elif lvl['price'] > current_price:
-                lvl['type'] = 'RESISTANCE'
-                real_resistances.append(lvl)
-        
-        # Sort again
-        real_supports.sort(key=lambda x: x['score'], reverse=True)
-        real_resistances.sort(key=lambda x: x['score'], reverse=True)
-        
-        m30_sup = real_supports[:3]
-        m30_res = real_resistances[:3]
-
+        current_price = df['close'].iloc[-1]
         m30_atr = df['atr'].iloc[-1]
         m30_rsi = df['rsi'].iloc[-1]
         vwap_24h = calculate_vwap_24h(df)
@@ -673,7 +407,7 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         def icon(sc: float) -> str:
             return "🟢" if sc >= 1.0 else "🟡" if sc > -2.0 else "🔴"
         
-        def fmt_lvls(lvls: List[dict]) -> str:
+        def fmt_lvls(lvls: list[dict]) -> str:
             if not lvls:
                 return "НЕТ"
             return " | ".join([f"{icon(l['score'])} ${l['price']:.4f} (Sc:{l['score']:.1f})" for l in lvls])
@@ -683,7 +417,7 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         m30_s1_score = m30_sup[0]['score'] if m30_sup else 0.0
         m30_r1_score = m30_res[0]['score'] if m30_res else 0.0
 
-        p_score, p_score_details, is_sup_target = calculate_legacy_p_score(
+        p_score, p_score_details, is_sup_target = calculate_p_score(
             regime, m30_rsi, m30_s1_score, m30_r1_score, current_price, m30_s1, m30_r1
         )
         
@@ -704,28 +438,12 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
             "open_interest": f"${open_interest:,.0f}" if open_interest else "N/A",
             "support": fmt_lvls(m30_sup),
             "resistance": fmt_lvls(m30_res),
-            # RAW level dicts for ai_analyst.py (no string parsing needed)
-            "supports_raw": m30_sup,
-            "resistances_raw": m30_res,
-            "level_source": lvl_source,
-            "regime_state": regime,
-            "regime_safety": safety,
             "vol_low": f"${vol_low:.4f}",
             "vol_high": f"${vol_high:.4f}",
             "vwap": f"${vwap_24h:.4f}",
             "p_score": p_score,
             "p_score_details": p_score_details,
-            "strategy": strat,
-            "candles": [
-                Candle(
-                    timestamp=int(row.time),
-                    open=row.open,
-                    high=row.high,
-                    low=row.low,
-                    close=row.close,
-                    volume=row.volume
-                ) for row in df.tail(20).itertuples(index=False)
-            ]
+            "strategy": strat
         }
     finally:
         await exchange.close()

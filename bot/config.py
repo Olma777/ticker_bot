@@ -1,7 +1,7 @@
 """
 Centralized configuration for Market Lens Bot.
 All settings, constants, and shared configurations in one place.
-Updated for P1-LOCKED-SPEC.
+Updated for P1-FIX (Strict Order Calc).
 """
 
 import os
@@ -19,7 +19,7 @@ DATA_DIR = BOT_DIR / "data"
 DB_PATH = DATA_DIR / "users.db"
 
 
-# --- TRADING SETTINGS (SYNCED WITH PINE v3.7 - LOCKED) ---
+# --- TRADING SETTINGS (SYNCED WITH PINE v3.7) ---
 @dataclass(frozen=True)
 class TradingSettings:
     """Trading parameters synced with Pine Script v3.7."""
@@ -41,8 +41,7 @@ class TradingSettings:
     p_score_threshold: int = 35
     funding_threshold: float = 0.0003
     
-    # --- P1-FIX-OrderCalc (Strict Formulas - LOCKED) ---
-    entry_mode: str = "TOUCH_LIMIT" # GLOBAL LOCK
+    # --- P1-FIX-OrderCalc (Strict Formulas) ---
     sl_buffer_atr: float = 0.25
     tp1_atr: float = 0.75
     tp2_atr: float = 1.25
@@ -105,9 +104,8 @@ class Config:
     """Runtime configuration with environment variables."""
     
     # --- INFRASTRUCTURE ---
-    DATA_DIR = DATA_DIR  # Expose module-level DATA_DIR to Config class
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     DATABASE_URL = DATA_DIR / "market_lens.db"
@@ -121,21 +119,11 @@ class Config:
     WA_DECAY = 0.35
     TMIN = 5
     ZONE_WIDTH_MULT = 0.5
-    MAX_DIST_PCT = 15.0          # <-- UPDATED HOTFIX (was 30.0)
-    
-    # --- RISK & LOGIC (NEW: SINGLE SOURCE OF TRUTH) ---
-    # --- RISK & LOGIC (NEW: SINGLE SOURCE OF TRUTH) ---
+    MAX_DIST_PCT = 30.0
     P_SCORE_THRESHOLD = 35
     FUNDING_THRESHOLD = 0.0003
     
-    # Strict ATR Multipliers (User Requested 2026-02-12)
-    SL_ATR_MULT = 1.0           # Precision Stop
-    TP1_ATR_MULT = 0.75         # Quick Profit
-    TP2_ATR_MULT = 1.25         # Level
-    TP3_ATR_MULT = 2.00         # Runner
-    
-    # --- P1-LOCKED ---
-    ENTRY_MODE = "TOUCH_LIMIT"
+    # --- P1-FIX-OrderCalc Defaults ---
     DEFAULT_CAPITAL = 1000.0
     DEFAULT_RISK_PCT = 1.0
     MIN_RRR = TRADING.min_rrr

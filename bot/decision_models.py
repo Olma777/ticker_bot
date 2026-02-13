@@ -1,59 +1,83 @@
 """
-Data models for Decision Engine (Phase 2).
+Data models for Decision Engine.
 Pure dataclasses with no logic to ensure type safety across the pipeline.
-Updated to include Candle Data for Kevlar Momentum checks.
+Updated for P1-FIX strict specs + Order Calc targets.
 """
 
 from dataclasses import dataclass
 from typing import Literal, List, Optional
 
+# Constants
 DecisionType = Literal["TRADE", "WAIT"]
+SideType = Literal["LONG", "SHORT"]
 DataQualityType = Literal["OK", "DEGRADED"]
+LevelGrade = Literal["STRONG", "MEDIUM", "WEAK"]
+Regime = Literal["EXPANSION", "NEUTRAL", "COMPRESSION"]
+EntryMode = Literal["TOUCH_LIMIT", "CLOSE_CONFIRM"]
+
+@dataclass(frozen=True)
+class LevelGradeResult:
+    """Strict level grading result (P1-FIX-01)."""
+    grade: LevelGrade
+    delta: int
+    label: str
 
 @dataclass
 class MarketContext:
+    """Market data snapshot."""
     price: float
     atr: float
     rsi: float
     vwap: float
-    regime: str  # "EXPANSION", "COMPRESSION", "NEUTRAL"
-    # Candle Data for Kevlar
-    candle_open: float
-    candle_high: float
-    candle_low: float
-    candle_close: float
+    regime: str
     data_quality: DataQualityType
 
 @dataclass
 class SentimentContext:
-    funding: float
-    open_interest: float
-    is_hot: bool  # True if OI is significantly high
+    """Crowd positioning data."""
+    funding: Optional[float]
+    open_interest: Optional[float]
     data_quality: DataQualityType
 
 @dataclass
 class KevlarResult:
+    """Result of Kevlar filters application."""
     passed: bool
-    blocked_by: Optional[str]  # e.g., "Momentum Instability"
+    blocked_by: Optional[str]
 
-@dataclass
+@dataclass(frozen=True)
 class PScoreResult:
-    """Detailed score result for debugging/logging."""
+    """P-Score calculation result (P1-FIX-02)."""
     score: int
     breakdown: List[str]
 
 @dataclass
+class RiskContext:
+    """Risk management calculations (P1-FIX-OrderCalc)."""
+    entry_price: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
+    stop_dist: float
+    stop_dist_pct: float
+    risk_amount: float     # $ Risk
+    position_size: float   # In Asset (e.g. BTC)
+    leverage: float        # Implied leverage based on capital
+    rrr_tp2: float         # Risk:Reward to TP2
+    fee_included: bool
+
+@dataclass
 class DecisionResult:
+    """Final decision from the engine."""
     decision: DecisionType
-    symbol: str
-    level: float
-    p_score: int
+    side: Optional[SideType]
+    entry_mode: Optional[EntryMode]
+    level_grade: Optional[LevelGradeResult]
+    pscore: PScoreResult
     kevlar: KevlarResult
-    entry: float
-    stop_loss: float            # CHANGED: was 'stop'
-    tp_targets: List[float]
+    risk: Optional[RiskContext]
     reason: str
-    direction: Optional[str] = None  # "LONG" or "SHORT" for TRADE decisions
     # Context Snapshots for Notifier
     market_context: Optional[MarketContext] = None
     sentiment_context: Optional[SentimentContext] = None

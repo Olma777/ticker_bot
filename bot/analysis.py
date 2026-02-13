@@ -10,27 +10,13 @@ from typing import Optional
 import ccxt.async_support as ccxt
 from openai import AsyncOpenAI
 from aiolimiter import AsyncLimiter
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
-import html
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_ATTEMPTS
 from bot.prices import get_crypto_price
-from bot.formatting import format_price_universal as _format_price
 from bot.indicators import get_technical_indicators
-from bot.cache import TieredCache
-from bot.logger import logger
-from bot.order_calc import validate_signal
 
 logger = logging.getLogger(__name__)
-
-# ===== AI ANALYST INTEGRATION =====
-try:
-    from bot.ai_analyst import get_ai_sniper_analysis
-    AI_ANALYST_AVAILABLE = True
-    logger.info("✓ AI Analyst module loaded successfully")
-except ImportError as e:
-    AI_ANALYST_AVAILABLE = False
-    logger.warning(f"⚠ AI Analyst not available: {e}. Using legacy analysis.")
 
 # --- RATE LIMITER ---
 rate_limiter = AsyncLimiter(RATE_LIMITS.openrouter_requests, RATE_LIMITS.openrouter_period)
@@ -39,8 +25,7 @@ rate_limiter = AsyncLimiter(RATE_LIMITS.openrouter_requests, RATE_LIMITS.openrou
 daily_cache: dict[str, str] = {}
 
 
-# Helper _format_price replaced by import from bot.formatting
-
+# --- HELPER FUNCTIONS ---
 
 async def fetch_ticker_multisource(
     exchanges: dict[str, ccxt.Exchange], 
@@ -113,20 +98,14 @@ def _get_openai_client() -> AsyncOpenAI:
         base_url="https://openrouter.ai/api/v1"
     )
 
-# Custom retry filter for 429/500/502/503
-def is_retryable_error(exception):
-    if hasattr(exception, "status_code"):
-        return exception.status_code in [429, 500, 502, 503]
-    return False
 
 @retry(
-    retry=retry_if_exception_type(Exception) & retry_if_exception(is_retryable_error),
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=2, min=4, max=20),
+    stop=stop_after_attempt(RETRY_ATTEMPTS),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
     reraise=True
 )
 async def _call_openai(prompt: str, temperature: float = 0.0) -> str:
-    """Call OpenAI API with robust retry logic for 429s."""
+    """Call OpenAI API with retry logic."""
     client = _get_openai_client()
     async with rate_limiter:
         completion = await client.chat.completions.create(
@@ -179,17 +158,12 @@ async def get_daily_briefing(user_input: Optional[str] = None) -> str:
     """
     
     try:
-        start_ts = datetime.now(timezone.utc)
         report = await _call_openai(prompt, temperature=0.0)
-        latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
-        # LEGACY: logging.info("Daily briefing generated")
-        logger.info("llm_response", symbol="DAILY", price=None, latency_ms=int(latency), tokens_used=None)
         daily_cache.clear()
         daily_cache[cache_key] = report
         return report
     except Exception as e:
-        # LEGACY: logger.error(f"Daily briefing error: {e}")
-        logger.error("llm_response_error", symbol="DAILY", exc_info=True)
+        logger.error(f"Daily briefing error: {e}")
         return f"⚠️ Ошибка Daily: {e}"
 
 
@@ -241,225 +215,37 @@ async def analyze_token_fundamentals(ticker: str) -> str:
     """
 
     try:
-        start_ts = datetime.now(timezone.utc)
-        resp = await _call_openai(prompt, temperature=0.1)
-        latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
-        logger.info("llm_response", symbol=ticker, price=None, latency_ms=int(latency), tokens_used=None)
-        return resp
+        return await _call_openai(prompt, temperature=0.1)
     except Exception as e:
-        logger.error("llm_response_error", symbol=ticker, exc_info=True)
+        logger.error(f"Audit error: {e}")
         return f"⚠️ Ошибка аудита: {e}"
-
-
-def _clean_telegram_html(text: str) -> str:
-    """ULTRA-SAFE HTML cleaner using placeholder approach.
-    
-    Strategy:
-    1. Find and extract ONLY valid allowed tags -> placeholders
-    2. Escape ALL remaining HTML chars (guaranteed safe)
-    3. Restore placeholders -> clean tags
-    """
-    if not text:
-        return ""
-    import re
-    import uuid
-    
-    allowed = {'b', 'strong', 'i', 'em', 'u', 'code', 'pre'}
-    placeholders = {}  # placeholder_key -> clean_tag
-    
-    # Step 1: Extract valid tags and replace with unique placeholders
-    def extract_tag(m):
-        slash = m.group(1)  # '' or '/'
-        name = m.group(2).lower() if m.group(2) else ''
-        if name in allowed:
-            key = f"__PH{len(placeholders)}__"
-            placeholders[key] = f"<{slash}{name}>"
-            return key
-        return ''  # Strip disallowed tags entirely
-    
-    # Match any HTML-like tag: <tag>, </tag>, <tag attr="val">
-    text = re.sub(r'<(/?)(\w+)[^>]*>', extract_tag, text)
-    
-    # Remove any remaining broken/empty tags: <>, </>, < >, etc.
-    text = re.sub(r'<[^>]*>', '', text)
-    # Remove orphan < or > that aren't part of tags
-    text = text.replace('<', '&lt;').replace('>', '&gt;')
-    text = text.replace('&', '&amp;')  # Escape ampersands AFTER <> handling
-    
-    # Fix double-escaped: &amp;lt; -> &lt; (from already-escaped input)
-    text = text.replace('&amp;lt;', '&lt;').replace('&amp;gt;', '&gt;').replace('&amp;amp;', '&amp;')
-    
-    # Step 3: Restore valid tags from placeholders
-    for key, tag in placeholders.items():
-        text = text.replace(key, tag)
-    
-    # Final safety: remove any empty tag pairs like <b></b>
-    for tag in allowed:
-        text = text.replace(f'<{tag}></{tag}>', '')
-    
-    return text.strip()
-
-
-def format_signal_plain(signal: dict) -> str:
-    """Fallback formatting without HTML (emojis and text only)"""
-    # Use helper to ensure valid price formatting if available, else raw
-    # Access _format_price from module scope
-    
-    lines = [
-        f"💎 {signal['symbol']} | M30 SNIPER",
-        f"💰 {_format_price(signal.get('current_price', signal.get('entry', 0)))}",
-        "─────────────────────────",
-        f"🎯 P-Score: {signal.get('p_score', 0)}/100",
-        f"🛡️ Kevlar: {'ПРОЙДЕН ✅' if signal.get('kevlar_passed') else 'БЛОКИРОВАН ❌'}",
-        f"{'🟢 LONG' if signal.get('side') == 'long' else '🔴 SHORT' if signal.get('side') == 'short' else '⚪ WAIT'}",
-        f"Вход:     {_format_price(signal.get('entry', 0))}",
-        f"Стоп:     🔴 {_format_price(signal.get('sl', 0))}",
-        f"TP1:      🟢 {_format_price(signal.get('tp1', 0))} (0.75x)",
-        f"TP2:      🟢 {_format_price(signal.get('tp2', 0))} (1.25x)",
-        f"TP3:      🟢 {_format_price(signal.get('tp3', 0))} (2.00x)",
-        "─────────────────────────",
-        f"⚠️ AI-анализ временно недоступен (ошибка форматирования)",
-        f"⚠️ Риск 1% | Лимитный ордер",
-    ]
-    return '\\n'.join(lines)
-async def _generate_ai_contextual_analysis(
-    ticker: str,
-    price: float,
-    change: str,
-    rsi: float,
-    funding: float,
-    oi: str,
-    supports: list[dict],
-    resistances: list[dict],
-    p_score: int,
-    mm_phase: str,
-    mm_verdict: list[str],
-    liquidity_hunts: list[str],
-    spoofing_signals: list[str],
-    btc_regime: str,
-    direction: str = "WAIT",
-    entry: float = 0.0
-) -> str:
-    """
-    ГЛУБОКИЙ СРЕДНЕСРОЧНЫЙ АНАЛИЗ МОНЕТЫ ЧЕРЕЗ OPENAI.
-    """
-    # 1. Форматирование уровней для промпта
-    sup_formatted = []  # FIXED: Initialization
-    for l in supports[:5]:
-        if l['score'] < 0: continue # FIXED: Filter negative scores
-        emoji = "🟢" if l['score'] >= 3.0 else "🟡" if l['score'] >= 1.0 else "🔴"
-        strength = l.get('strength', 'N/A')
-        sup_formatted.append(f"      {emoji} {_format_price(l['price'])} (Score: {l['score']:.1f}, {strength})")
-    
-    res_formatted = []
-    for l in resistances[:5]:
-        if l['score'] < 0: continue # FIXED: Filter negative scores
-        emoji = "🟢" if l['score'] >= 3.0 else "🟡" if l['score'] >= 1.0 else "🔴"
-        strength = l.get('strength', 'N/A')
-        res_formatted.append(f"      {emoji} {_format_price(l['price'])} (Score: {l['score']:.1f}, {strength})")
-    
-    sup_text = "\n".join(sup_formatted) if sup_formatted else "      • НЕТ АКТИВНЫХ УРОВНЕЙ"
-    res_text = "\n".join(res_formatted) if res_formatted else "      • НЕТ АКТИВНЫХ УРОВНЕЙ"
-    
-    # 2. Форматирование MM анализа
-    mm_text = "\n".join([f"      {line}" for line in mm_verdict if line.strip()]) if mm_verdict else "      • Нейтральная фаза"
-    liq_text = "\n".join([f"      {line}" for line in liquidity_hunts if line.strip()]) if liquidity_hunts else "      • Нет явных зон охоты"
-    spoof_text = "\n".join([f"      {line}" for line in spoofing_signals if line.strip()]) if spoofing_signals else "      • Нет признаков манипуляции"
-    
-    # 3. Промпт (ТОЧНО по шаблону)
-    # 3. Промпт (ТОЧНО по шаблону)
-    prompt = f"""
-    Краткий анализ для {ticker} по данным индикатора:
-
-    Цена: {_format_price(price)}
-    Фаза MM: {mm_phase}
-    Funding: {funding*100:.3f}%
-    OI: {oi}
-    
-    ПОДДЕРЖКА:
-    {sup_text}
-    
-    СОПРОТИВЛЕНИЕ:
-    {res_text}
-
-    Дай 4 коротких пункта в формате:
-    1. КЛЮЧЕВЫЕ УРОВНИ: (2 уровня)
-    2. ФАЗА РЫНКА: (1 предложение)
-    3. ДЕЙСТВИЯ MM: (1 предложение по funding/OI и ликвидности)
-    4. КОНТЕКСТ СИГНАЛА: Объясни, насколько математический сигнал {direction} с входом {_format_price(entry)} согласуется с текущей фазой рынка. НЕ давай свои цены входа/SL/TP - используй только предоставленные данные.
-
-    ТОЛЬКО HTML, БЕЗ Markdown. Кратко, по делу.
-
-    ВАЖНОЕ ТРЕБОВАНИЕ ПО ФОРМАТИРОВАНИЮ:
-    - ЗАПРЕЩЕНО использовать теги <ol>, <ul>, <li>, <h1>, <h2>, <div>, <p>, <br>
-    - РАЗРЕШЕНЫ только: <b>, <i>, <code>, <pre>
-    - Для списков используй простые цифры с точкой (1. Текст) и перенос строки
-    - НЕ ИСПОЛЬЗУЙ никакие другие HTML теги
-    - НЕ ИСПОЛЬЗУЙ Markdown (**)
-    """
-
-    try:
-        completion = await _call_openai(prompt, temperature=0.3)
-        if not completion:
-            logger.error("AI Analysis returned empty response")
-            return ""
-            
-        cleaned = _clean_telegram_html(completion)
-        return cleaned
-        
-    except Exception as e:
-        logger.error(f"AI contextual analysis failed: {str(e)}", exc_info=True)
-        # Re-raise to let caller handle fallback
-        raise e
 
 
 # --- 3. SNIPER ---
 
+async def get_sniper_analysis(ticker: str, language: str = "ru") -> str:
+    """Generate sniper analysis for a ticker."""
+    price_data, error = await get_crypto_price(ticker)
+    if not price_data:
+        return f"⚠️ Не удалось найти {ticker}."
 
-# ===== AI ANALYST - FORCED MODE =====
-try:
-    # Duplicate import removed
-    # from bot.ai_analyst import get_ai_sniper_analysis
-    AI_ANALYST_AVAILABLE = True
-    logger.info("✅ AI Analyst FORCED MODE - ENABLED")
-except ImportError as e:
-    AI_ANALYST_AVAILABLE = False
-    logger.error(f"❌ AI Analyst MISSING - BOT WILL FAIL: {e}")
+    indicators = await get_technical_indicators(ticker)
+    if not indicators:
+        return f"⚠️ Ошибка получения индикаторов для {ticker}."
 
-async def get_sniper_analysis(ticker: str, language: str = "ru") -> dict:
-    """FORCED AI ANALYST - NO FALLBACK - Returns Dict"""
-    
-    if not AI_ANALYST_AVAILABLE:
-        return {
-            "status": "ERROR", 
-            "reason": "AI Analyst module is missing",
-            "symbol": ticker
-        }
-    
-    try:
-        start_ts = datetime.now(timezone.utc)
-        signal = await get_ai_sniper_analysis(ticker)
-        latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
-        logger.info("llm_response", symbol=ticker, price=None, latency_ms=int(latency), tokens_used=None)
-        
-        return signal
-            
-    except Exception as e:
-        logger.error("llm_response_error", symbol=ticker, exc_info=True)
-        return {
-            "status": "ERROR",
-            "reason": str(e),
-            "symbol": ticker
-        }
-
-async def _generate_legacy_analysis(ticker: str, strat: dict, indicators: dict) -> str:
-    """Generate analysis using legacy OpenAI prompt (backup)"""
     curr_price = indicators['price']
     change = indicators['change']
-    p_score = strat['score']
+    calc_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     
-    # Calculate calc_time just in case it's missing
-    calc_time = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    p_score = indicators['p_score']
+    strat = indicators['strategy']
+    
+    # Determine sentiment
+    try:
+        f_val = float(indicators['funding'].strip('%').replace('+', ''))
+        sentiment = "Бычье" if f_val > 0.01 else "Медвежье" if f_val < -0.01 else "Нейтральное"
+    except (ValueError, AttributeError):
+        sentiment = "N/A"
 
     def fmt(val: float) -> str:
         return f"${val:.4f}" if isinstance(val, (int, float)) and val > 0 else "N/A"
@@ -651,131 +437,3 @@ async def get_market_scan() -> str:
 async def get_crypto_analysis(ticker: str, name: str, language: str = "ru") -> str:
     """Legacy function - redirects to analyze_token_fundamentals."""
     return await analyze_token_fundamentals(ticker)
-
-# Tiered Cache: Fundamental
-_fund_cache = TieredCache()
-
-async def _original_fetch_logic(symbol: str) -> str:
-    sym = symbol.upper().replace("USDT", "").replace("USD", "")
-    return await analyze_token_fundamentals(sym)
-
-async def get_fundamental(symbol: str) -> str:
-    return await _fund_cache.get_or_set(
-        f"fundamental:{symbol}",
-        lambda: _original_fetch_logic(symbol),
-        "fundamental"
-    )
-
-
-def format_signal_html(signal: dict) -> str:
-    """Форматирование торгового сигнала с полным MM и AI анализом."""
-    
-    required = ["symbol", "side", "entry", "sl", "tp1", "tp2", "tp3", "rrr", "p_score"]
-    for field in required:
-        if field not in signal:
-            raise ValueError(f"Missing field: {field}")
-    
-    # Guaranteed AI Disabling
-    if signal.get("ai_analysis"):
-        logger.error("AI ANALYSIS NOT EMPTY - BUG!")
-        signal["ai_analysis"] = ""  # Force clear
-    ai_section = ""
-    
-    side_emoji = "🟢 LONG" if signal['side'] == 'long' else '🔴 SHORT' if signal['side'] == 'short' else '⚪ WAIT'
-    
-    stop_dist = abs(signal["entry"] - signal["sl"])
-    rrr_tp1 = abs(signal["tp1"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
-    rrr_tp2 = abs(signal["tp2"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
-    rrr_tp3 = abs(signal["tp3"] - signal["entry"]) / stop_dist if stop_dist > 0 else 0
-    
-    # ----- FILTERED MM VERDICT (без дублей) -----
-    mm_phase = signal.get("mm_phase", "⚪ NEUTRAL")
-    mm_verdict = signal.get("mm_verdict", [])
-    filtered_verdict = []
-    for line in mm_verdict:
-        line_stripped = line.strip()
-        if (not line_stripped.startswith("• <b>Phase:</b>") and 
-            not line_stripped.startswith("Phase:") and
-            "Accumulation signals:" not in line_stripped and
-            "Distribution signals:" not in line_stripped):
-            filtered_verdict.append(line)
-    
-    mm_text = "\n".join(filtered_verdict) if filtered_verdict else "• Нет дополнительных сигналов"
-    mm_text = _clean_telegram_html(mm_text)
-    
-    # ----- DEDUPLICATED LIQUIDITY -----
-    liquidity_all = signal.get("liquidity_hunts", [])
-    unique_liquidity = []
-    seen_patterns = set()
-    
-    for line in liquidity_all:
-        if ":" in line:
-            pattern = line.split(":")[0]
-        else:
-            pattern = line[:20]  # Первые 20 символов
-            
-        if pattern not in seen_patterns:
-            unique_liquidity.append(line)
-            seen_patterns.add(pattern)
-            
-    liquidity_text = "\n".join(unique_liquidity) if unique_liquidity else "• Нет явных зон охоты"
-    liquidity_text = _clean_telegram_html(liquidity_text)
-    
-    spoofing = signal.get("spoofing_signals", [])
-    spoofing_text = "\n".join(spoofing) if spoofing else "• Нет признаков манипуляции"
-    spoofing_text = _clean_telegram_html(spoofing_text)
-    
-    # ----- LEVELS (ПОКАЗЫВАЕМ ВСЕ, С ИКОНКАМИ) -----
-    strong_supports = _clean_telegram_html(str(signal.get("strong_supports", "НЕТ")))
-    strong_resists = _clean_telegram_html(str(signal.get("strong_resists", "НЕТ")))
-    
-    # ----- LOGIC -----
-    logic_setup = _clean_telegram_html(str(signal.get("logic_setup", "No logic")))
-    logic_summary = _clean_telegram_html(str(signal.get("logic_summary", "No summary")))
-    
-    # ----- RRR CALCULATION -----
-    # Already calc above
-    
-    # P0 FIX: Display REAL PRICE, not entry
-    display_price = signal.get('current_price', signal['entry'])
-    
-    final_text = f"""
-💎 <b>{signal['symbol']}</b> | M30 SNIPER
-💰 {_format_price(display_price)} ({signal.get('change', 0):+.2f}%)
-─────────────────────────
-🎯 P-Score: {signal['p_score']}/100
-🛡️ Kevlar: {'ПРОЙДЕН ✅' if signal.get('kevlar_passed') else 'БЛОКИРОВАН ❌'}
-
-{side_emoji}
-Вход:     <code>{_format_price(signal['entry'])}</code>
-Стоп:     🔴 <code>{_format_price(signal['sl'])}</code>
-TP1:      🟢 <code>{_format_price(signal['tp1'])}</code> ({rrr_tp1:.2f}x)
-TP2:      🟢 <code>{_format_price(signal['tp2'])}</code> ({rrr_tp2:.2f}x)
-TP3:      🟢 <code>{_format_price(signal['tp3'])}</code> ({rrr_tp3:.2f}x)
-RRR (TP2): {signal['rrr']:.2f}
-
-─────────────────────────
-🧠 <b>SMART MONEY ФАЗА</b>
-{mm_phase}
-{mm_text}
-
-🩸 <b>ЛИКВИДНОСТЬ И СТОП-ОХОТА</b>
-{liquidity_text}
-
-🎭 <b>МАНИПУЛЯЦИИ / СПУФИНГ</b>
-{spoofing_text}
-
-📊 <b>КЛЮЧЕВЫЕ УРОВНИ</b>
-🟢 Поддержка: {strong_supports}
-🔴 Сопротивление: {strong_resists}
-{ai_section}
-⚙️ <b>ЛОГИКА СДЕЛКИ</b>
-• {logic_setup}
-• {logic_summary}
-• RSI: {signal.get('rsi', 'N/A')}
-
-─────────────────────────
-⚠️ Риск 1% | Лимитный ордер
-🕒 {datetime.now(timezone.utc).strftime('%H:%M UTC')}
-"""
-    return _clean_telegram_html(final_text)

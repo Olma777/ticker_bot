@@ -1,25 +1,18 @@
-"""
-Market Lens - Webhook Endpoint.
-Receives TradingView alerts and triggers the Decision Engine.
-Phase 2 Update: Background processing for instant 200 OK.
-"""
-
 import logging
 import json
 import hashlib
 import hmac
+import html
+import requests
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
-from pydantic import BaseModel, field_validator, Field
-from typing import Literal, Optional, Dict, Any, List
+from pydantic import BaseModel, field_validator
+from typing import Literal
 
 from bot.config import Config
-from bot.prices import PriceAggregator
-from datetime import datetime
 from bot.database import init_db, save_event
-from bot.decision_engine import process_signal
-from bot.notifier import send_card
-from bot.validators import SymbolNormalizer
+from bot.decision_engine import make_decision
+from bot.notifier import send_decision_card
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -32,7 +25,7 @@ async def lifespan(app: FastAPI):
     Config.validate()
     
     # 2. Init DB
-    await init_db()
+    init_db()
     
     logger.info("Server started successfully.")
     yield
@@ -51,15 +44,10 @@ class TvPayload(BaseModel):
     level: float
     atr: float
     zone_half: float
-    score: float = Field(alias="sc")  # FIXED: Pine Script sends 'sc', we map to 'score'
-    
-    # New Fields for v3.7 Sync (Source of Truth)
-    levels: Optional[Dict[str, List[Dict[str, Any]]]] = None
-    regime: Optional[Dict[str, Any]] = None
-    
-    # Optional fields or fields used in logic
-    touches: int = 0
-    
+    score: float
+    touches: int
+    regime: str
+
     @field_validator('bar_time')
     def validate_time(cls, v):
         # Sanity check: Must be > Year 2020
@@ -80,24 +68,6 @@ def generate_event_id(p: TvPayload) -> str:
     raw_str = f"{p.tv_symbol}|{p.tf}|{p.bar_time}|{p.event}|{norm_level}|{norm_zone}"
     return hashlib.sha256(raw_str.encode()).hexdigest()
 
-
-async def run_analysis_pipeline(payload_data: dict):
-    """
-    Background Task: Encapsulates the Decision Engine pipeline.
-    1. Parse & Process (Engine)
-    2. Notify (Telegram)
-    """
-    try:
-        # Call Decision Engine
-        result = await process_signal(payload_data)
-        
-        # Send Notification
-        await send_card(result)
-        
-    except Exception as e:
-        logger.error(f"Analysis Pipeline Failed for {payload_data.get('symbol')}: {e}")
-
-
 # --- ENDPOINT ---
 @app.post("/tv/webhook")
 async def webhook_listener(
@@ -110,15 +80,6 @@ async def webhook_listener(
         logger.warning("Auth failed")
         raise HTTPException(status_code=401, detail="Invalid Secret")
 
-    # 1.5 Symbol Normalization (Source of Truth)
-    try:
-        norm = SymbolNormalizer.normalize(payload.symbol)
-        payload.symbol = norm['binance'] # Force consistent format (e.g. APEUSDT)
-    except Exception as e:
-        logger.warning(f"Symbol normalization specific failed: {e}")
-        # Proceed with raw, analysis pipeline handles robustness
-
-
     # 2. Dedup ID Generation
     event_id = generate_event_id(payload)
     
@@ -126,8 +87,9 @@ async def webhook_listener(
     data = payload.model_dump()
     data['event_id'] = event_id
     
-    # Save Event (Async)
-    is_new = await save_event(
+    # Note: save_event is sync for sqlite, but fast enough. 
+    # Ideally async if high volume, but SQLite WAL is plenty fast.
+    is_new = save_event(
         event_id=event_id,
         bar_time=payload.bar_time,
         symbol=payload.symbol,
@@ -138,36 +100,18 @@ async def webhook_listener(
     if not is_new:
         return {"status": "ignored_duplicate", "id": event_id}
 
-    # 4. Trigger Analysis (Background)
-    # Return 200 immediately to TradingView
-    background_tasks.add_task(run_analysis_pipeline, data)
+    # 4. DECISION ENGINE (Async Pipeline)
+    # We await the decision process (fetching data) -> usually 1-2s.
+    # If this timeout concerns arise, we can move this entirely to background_tasks,
+    # but spec implies immediate process trigger.
+    try:
+        decision_result = await make_decision(data)
+        
+        # 5. Notify (Background Sync)
+        background_tasks.add_task(send_decision_card, decision_result, data)
+        
+    except Exception as e:
+        logger.error(f"Decision Pipeline Failed: {e}")
+        # Even if decision fails, we return 200 as we saved the event
     
     return {"status": "received", "id": event_id}
-
-
-@app.get("/health")
-async def health_check():
-    checks = {}
-    errors = []
-    try:
-        aggregator = PriceAggregator()
-        import asyncio
-        async def _probe():
-            return await aggregator.get_price("BTCUSDT")
-        try:
-            price, provider = await asyncio.wait_for(_probe(), timeout=5)
-            checks["exchange"] = True
-        except Exception as e:
-            checks["exchange"] = False
-            errors.append(f"exchange: {str(e)[:50]}")
-    except Exception as e:
-        checks["exchange"] = False
-        errors.append(f"exchange: {str(e)[:50]}")
-    checks["config"] = bool(getattr(Config, "OPENROUTER_API_KEY", None))
-    status_code = 200 if all(checks.values()) else 503
-    return {
-        "status": "ok" if status_code == 200 else "degraded",
-        "checks": checks,
-        "errors": errors,
-        "timestamp": datetime.utcnow().isoformat()
-    }
