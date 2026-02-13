@@ -11,6 +11,7 @@ import ccxt.async_support as ccxt
 from openai import AsyncOpenAI
 from aiolimiter import AsyncLimiter
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
+import html
 
 from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_ATTEMPTS
 from bot.prices import get_crypto_price
@@ -251,80 +252,39 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 
 
 def _clean_telegram_html(text: str) -> str:
-    """
-    Converts AI-HTML to Telegram-safe format.
-    Structure: <b>->bold, <li>->•, <ol>->1. 2. 3.
-    """
+    """ULTRA-SAFE cleaner"""
     if not text:
         return ""
-    
     import re
     
-    # 1. Convert lists to plain text (IMPORTANT: before any escaping)
-    # <ol> + <li> -> 1., 2., 3.
-    def convert_ordered_list(match):
-        items = re.findall(r'<li[^>]*>(.*?)</li>', match.group(1), re.DOTALL | re.IGNORECASE)
-        return '\\n'.join(f"{i+1}. {item.strip()}" for i, item in enumerate(items))
+    # Remove EMPTY tags <> and </>
+    text = re.sub(r'<\s*/?\s*>', '', text)
     
-    # <ul> + <li> -> • • •
-    def convert_unordered_list(match):
-        items = re.findall(r'<li[^>]*>(.*?)</li>', match.group(1), re.DOTALL | re.IGNORECASE)
-        return '\\n'.join(f"• {item.strip()}" for item in items)
+    # Remove all tags except allowed
+    allowed = {'b', 'strong', 'i', 'em', 'u', 'code', 'pre'}
     
-    # Process <ol>...</ol>
-    text = re.sub(r'<ol[^>]*>(.*?)</ol>', convert_ordered_list, text, flags=re.DOTALL | re.IGNORECASE)
-    # Process <ul>...</ul>
-    text = re.sub(r'<ul[^>]*>(.*?)</ul>', convert_unordered_list, text, flags=re.DOTALL | re.IGNORECASE)
+    def clean_tag(m):
+        tag = m.group(0)
+        name = m.group(2).lower() if m.group(2) else ""
+        if name in allowed:
+            # Return CLEAN tag without attributes: <b> or </b>
+            return f"<{m.group(1)}{name}>"
+        return ''  # Remove tag, keep content
     
-    # Single <li> (if left outside lists)
-    text = re.sub(r'<li[^>]*>(.*?)</li>', r'• \1', text, flags=re.IGNORECASE)
+    # Important: group 2 can be None for empty tags, so we check
+    text = re.sub(r'<(/?)(\w+)[^>]*>', clean_tag, text)
     
-    # 2. Convert headings <h1>-<h6> to <b>text</b>
-    text = re.sub(r'<h[1-6][^>]*>(.*?)</h[1-6]>', r'<b>\1</b>', text, flags=re.DOTALL | re.IGNORECASE)
-    
-    # 3. Replace <br>, <p> with newlines
-    text = re.sub(r'<br\s*/?>', '\\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</p>', '\\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'<p[^>]*>', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'<div[^>]*>', '\\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</div>', '\\n', text, flags=re.IGNORECASE)
-    
-    # 4. Remove other unsupported tags (but keep content!)
-    # Remove: <span>, <font>, <div>, etc.
-    text = re.sub(r'</?(?:span|font|div|section|article|header|footer)[^>]*>', '', text, flags=re.IGNORECASE)
-    
-    # 5. Keep only allowed Telegram tags: <b>, <i>, <u>, <code>, <pre>, <a>
-    allowed_pattern = r'</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|tg-spoiler)(?:\s+[^>]*)?>'
-    
-    # Find all allowed tags and temporarily escape them
-    allowed_tags = re.findall(allowed_pattern, text, re.IGNORECASE)
-    placeholders = {}
-    for i, tag in enumerate(allowed_tags):
-        placeholder = f"§§§{i}§§§"
-        placeholders[placeholder] = tag
-        text = text.replace(tag, placeholder, 1)
-    
-    # 6. Escape dangerous characters < > & in remaining text
+    # Escape remaining < and > (just in case)
     text = text.replace('&', '&amp;')
     text = text.replace('<', '&lt;')
     text = text.replace('>', '&gt;')
     
-    # 7. Restore allowed tags (now safe)
-    for placeholder, tag in placeholders.items():
-        # Normalize tags to lowercase for Telegram
-        clean_tag = re.sub(r'<(/?)(\\w+)', lambda m: f"<{m.group(1)}{m.group(2).lower()}>", tag, flags=re.IGNORECASE)
-        # Handle strong->b, em->i replacements if needed, but Telegram supports strong/em too usually.
-        # Let's map strict telegram tags: strong->b, em->i for safety
-        clean_tag = clean_tag.replace('<strong>', '<b>').replace('</strong>', '</b>')
-        clean_tag = clean_tag.replace('<em>', '<i>').replace('</em>', '</i>')
-        text = text.replace(placeholder, clean_tag)
+    # Restore allowed tags (reverse replacement)
+    for tag in allowed:
+        text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>')
+        text = text.replace(f'&lt;/{tag}&gt;', f'</{tag}>')
     
-    # 8. Clean whitespace
-    lines = [line.rstrip() for line in text.split('\\n')]
-    text = '\\n'.join(line for line in lines if line.strip())
-    text = re.sub(r'\\n{3,}', '\\n\\n', text)
-    
-    return text.strip()
+    return text
 
 
 def format_signal_plain(signal: dict) -> str:
@@ -349,52 +309,6 @@ def format_signal_plain(signal: dict) -> str:
         f"⚠️ Риск 1% | Лимитный ордер",
     ]
     return '\\n'.join(lines)
-    if not text:
-        return ""
-
-    import re
-    
-    # 1. Сначала обрабатываем списки, пока теги живы
-    # Заменяем <li> на буллет с новой строки
-    text = re.sub(r'<li[^>]*>', '\n  • ', text, flags=re.IGNORECASE)
-    # Удаляем закрывающие </li>, <ul>, <ol>
-    text = re.sub(r'</li[^>]*>', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'</?[ou]l[^>]*>', '', text, flags=re.IGNORECASE)
-    
-    # 2. Заменяем <br> и <p> на переносы строк
-    text = re.sub(r'<br[^>]*>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</p[^>]*>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'<p[^>]*>', '', text, flags=re.IGNORECASE)
-
-    allowed_tags = {
-        'b', 'strong', 'i', 'em', 'u', 'ins', 
-        's', 'strike', 'del', 'code', 'pre', 'span', 'a'
-    }
-    
-    def remove_tag(match):
-        tag_full = match.group(0)
-        tag_name = match.group(2).lower()
-        
-        # Если это ссылка <a href="...">, оставляем как есть
-        if tag_name == 'a':
-            return tag_full
-            
-        if tag_name in allowed_tags:
-            return tag_full
-        
-        return '' # Удаляем запрещенный тег, но оставляем контент
-    
-    # 3. Удаляем все остальные теги, кроме разрешенных
-    text = re.sub(r'<(/?)\"?([^>\\s\"]+)[^>]*>', remove_tag, text)
-    
-    # 4. Чистим множественные переносы строк
-    lines = [line.strip() for line in text.split('\n')]
-    # Фильтруем пустые строки, но оставляем одиночные разделители
-    clean_text = '\n'.join([l for l in lines if l])
-    
-    return clean_text.strip()
-
-
 async def _generate_ai_contextual_analysis(
     ticker: str,
     price: float,
@@ -749,15 +663,11 @@ def format_signal_html(signal: dict) -> str:
         if field not in signal:
             raise ValueError(f"Missing field: {field}")
     
-    # ----- AI CONTEXTUAL ANALYSIS (DISABLED BY AUDITOR REQUEST) -----
-    # ai_analysis = signal.get("ai_analysis", "")
+    # Guaranteed AI Disabling
+    if signal.get("ai_analysis"):
+        logger.error("AI ANALYSIS NOT EMPTY - BUG!")
+        signal["ai_analysis"] = ""  # Force clear
     ai_section = ""
-    # if ai_analysis:
-    #     ai_section = f"""
-    # ─────────────────────────
-    # 🤖 <b>DEEP AI CONTEXT</b>
-    # {ai_analysis}
-    # """
     
     side_emoji = "🟢 LONG" if signal['side'] == 'long' else '🔴 SHORT' if signal['side'] == 'short' else '⚪ WAIT'
     
