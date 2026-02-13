@@ -441,10 +441,10 @@ async def main() -> None:
         sys.exit(1)
     # ==============================
 
-    # configure_logging(json_logs=True)  # Already configured globally
-    logger.info("bot_started", version="v3.7-alpha1")
+    logger.info("bot_started", version="v3.7.1-HOTFIX-2")
     # Initialize database
-    await init_db()
+    await init_user_db()
+    await init_events_db()
     
     # Setup scheduler
     scheduler.add_job(check_and_send_briefings, 'cron', minute=0)

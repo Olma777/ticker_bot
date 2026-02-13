@@ -252,39 +252,22 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 
 def _clean_telegram_html(text: str) -> str:
     """
-    Robust HTML cleaner for Telegram.
-    1. Escapes special chars outside tags.
-    2. Allows only specific tags.
+    Emergency Fix: Remove all potential HTML to prevent parsing errors.
+    Escapes special characters.
     """
     if not text:
         return ""
     
-    # 1. Escape basic XML entities first
-    # This prevents "Quote inside text" from breaking parser
-    text = text.replace('&', '&amp;')
-    text = text.replace('<', '&lt;')
-    text = text.replace('>', '&gt;')
-    text = text.replace('"', '&quot;')
+    # Replace dangerous characters with HTML entities
+    replacements = [
+        ('&', '&amp;'),
+        ('<', '&lt;'),
+        ('>', '&gt;'),
+        ('"', '&quot;'),
+    ]
     
-    # 2. Restore allowed tags
-    # We replace the escaped versions back to real tags
-    # Allowed: <b>, <strong>, <i>, <em>, <u>, <s>, <strike>, <del>, <code>, <pre>, <a href="...">
-    
-    # Bold
-    text = text.replace('&lt;b&gt;', '<b>').replace('&lt;/b&gt;', '</b>')
-    text = text.replace('&lt;strong&gt;', '<b>').replace('&lt;/strong&gt;', '</b>')
-    
-    # Italic
-    text = text.replace('&lt;i&gt;', '<i>').replace('&lt;/i&gt;', '</i>')
-    text = text.replace('&lt;em&gt;', '<i>').replace('&lt;/em&gt;', '</i>')
-    
-    # Code / Pre
-    text = text.replace('&lt;code&gt;', '<code>').replace('&lt;/code&gt;', '</code>')
-    text = text.replace('&lt;pre&gt;', '<pre>').replace('&lt;/pre&gt;', '</pre>')
-    
-    # Lists (Manual formatting)
-    text = text.replace('&lt;li&gt;', '\n • ').replace('&lt;/li&gt;', '')
-    text = text.replace('&lt;ul&gt;', '').replace('&lt;/ul&gt;', '')
+    for old, new in replacements:
+        text = text.replace(old, new)
     
     return text.strip()
     if not text:
