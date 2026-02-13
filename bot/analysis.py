@@ -137,13 +137,20 @@ def _get_openai_client() -> AsyncOpenAI:
     )
 
 
+# Custom retry filter for 429/500/502/503
+def is_retryable_error(exception):
+    if hasattr(exception, "status_code"):
+        return exception.status_code in [429, 500, 502, 503]
+    return False
+
 @retry(
-    stop=stop_after_attempt(RETRY_ATTEMPTS),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(Exception) & retry.retry_if_exception(is_retryable_error),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=4, max=20),
     reraise=True
 )
 async def _call_openai(prompt: str, temperature: float = 0.0) -> str:
-    """Call OpenAI API with retry logic."""
+    """Call OpenAI API with robust retry logic for 429s."""
     client = _get_openai_client()
     async with rate_limiter:
         completion = await client.chat.completions.create(
@@ -394,11 +401,17 @@ async def _generate_ai_contextual_analysis(
 
     try:
         completion = await _call_openai(prompt, temperature=0.3)
-        return _clean_telegram_html(completion)
+        if not completion:
+            logger.error("AI Analysis returned empty response")
+            return ""
+            
+        cleaned = _clean_telegram_html(completion)
+        return cleaned
         
     except Exception as e:
-        logger.error(f"AI contextual analysis failed: {e}")
-        return ""
+        logger.error(f"AI contextual analysis failed: {str(e)}", exc_info=True)
+        # Re-raise to let caller handle fallback
+        raise e
 
 
 # --- 3. SNIPER ---
