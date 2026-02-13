@@ -106,7 +106,7 @@ class Config:
     
     # --- INFRASTRUCTURE ---
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     DATABASE_URL = DATA_DIR / "market_lens.db"

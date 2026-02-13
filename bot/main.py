@@ -35,7 +35,7 @@ TOKEN = Config.TELEGRAM_TOKEN
 CHANNEL_ID = Config.TELEGRAM_CHAT_ID
 
 if not TOKEN:
-    print("❌ ОШИБКА: Токен бота не найден! Убедитесь, что TELEGRAM_TOKEN есть в .env")
+    print("❌ ОШИБКА: Токен бота не найден! Убедитесь, что TELEGRAM_TOKEN (или BOT_TOKEN) есть в .env")
     sys.exit(1)
 
 # --- LOGGING ---
