@@ -252,39 +252,52 @@ async def analyze_token_fundamentals(ticker: str) -> str:
 
 
 def _clean_telegram_html(text: str) -> str:
-    """ULTRA-SAFE cleaner"""
+    """ULTRA-SAFE HTML cleaner using placeholder approach.
+    
+    Strategy:
+    1. Find and extract ONLY valid allowed tags -> placeholders
+    2. Escape ALL remaining HTML chars (guaranteed safe)
+    3. Restore placeholders -> clean tags
+    """
     if not text:
         return ""
     import re
+    import uuid
     
-    # Remove EMPTY tags <> and </>
-    text = re.sub(r'<\s*/?\s*>', '', text)
-    
-    # Remove all tags except allowed
     allowed = {'b', 'strong', 'i', 'em', 'u', 'code', 'pre'}
+    placeholders = {}  # placeholder_key -> clean_tag
     
-    def clean_tag(m):
-        tag = m.group(0)
-        name = m.group(2).lower() if m.group(2) else ""
+    # Step 1: Extract valid tags and replace with unique placeholders
+    def extract_tag(m):
+        slash = m.group(1)  # '' or '/'
+        name = m.group(2).lower() if m.group(2) else ''
         if name in allowed:
-            # Return CLEAN tag without attributes: <b> or </b>
-            return f"<{m.group(1)}{name}>"
-        return ''  # Remove tag, keep content
+            key = f"__PH{len(placeholders)}__"
+            placeholders[key] = f"<{slash}{name}>"
+            return key
+        return ''  # Strip disallowed tags entirely
     
-    # Important: group 2 can be None for empty tags, so we check
-    text = re.sub(r'<(/?)(\w+)[^>]*>', clean_tag, text)
+    # Match any HTML-like tag: <tag>, </tag>, <tag attr="val">
+    text = re.sub(r'<(/?)(\w+)[^>]*>', extract_tag, text)
     
-    # Escape remaining < and > (just in case)
-    text = text.replace('&', '&amp;')
-    text = text.replace('<', '&lt;')
-    text = text.replace('>', '&gt;')
+    # Remove any remaining broken/empty tags: <>, </>, < >, etc.
+    text = re.sub(r'<[^>]*>', '', text)
+    # Remove orphan < or > that aren't part of tags
+    text = text.replace('<', '&lt;').replace('>', '&gt;')
+    text = text.replace('&', '&amp;')  # Escape ampersands AFTER <> handling
     
-    # Restore allowed tags (reverse replacement)
+    # Fix double-escaped: &amp;lt; -> &lt; (from already-escaped input)
+    text = text.replace('&amp;lt;', '&lt;').replace('&amp;gt;', '&gt;').replace('&amp;amp;', '&amp;')
+    
+    # Step 3: Restore valid tags from placeholders
+    for key, tag in placeholders.items():
+        text = text.replace(key, tag)
+    
+    # Final safety: remove any empty tag pairs like <b></b>
     for tag in allowed:
-        text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>')
-        text = text.replace(f'&lt;/{tag}&gt;', f'</{tag}>')
+        text = text.replace(f'<{tag}></{tag}>', '')
     
-    return text
+    return text.strip()
 
 
 def format_signal_plain(signal: dict) -> str:

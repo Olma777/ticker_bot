@@ -332,14 +332,19 @@ async def cmd_sniper(message: Message) -> None:
             report = format_signal_html(signal)
             await message.answer(report, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.error(f"HTML Parse Error: {e}")
-            await message.answer(f"⚠️ Ошибка форматирования сигнала: {e}")
+            logger.error(f"HTML Parse Error, falling back to plain text: {e}")
+            try:
+                plain = format_signal_plain(signal)
+                await message.answer(plain)  # NO parse_mode — guaranteed safe
+            except Exception as e2:
+                logger.error(f"Plain format also failed: {e2}")
+                await message.answer(f"⚠️ Ошибка форматирования. Попробуйте позже.")
         
-    except Exception as e:
-        logger.error(f"Error in cmd_sniper: {e}", exc_info=True)
-        await message.answer(f"⚠️ Критическая ошибка бота: {e}")
     except PriceUnavailableError as e:
         await message.answer(f"⚠️ Price unavailable: {e}")
+    except Exception as e:
+        logger.error(f"Error in cmd_sniper: {e}", exc_info=True)
+        await message.answer(f"⚠️ Критическая ошибка бота. Попробуйте позже.")
 
 
 @dp.message(Command("daily"))
