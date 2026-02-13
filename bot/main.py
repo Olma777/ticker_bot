@@ -250,13 +250,31 @@ async def cmd_sniper(message: Message) -> None:
             reason = signal.get("reason", "Unknown")
             status = signal.get("status", "ERROR")
             
-             # If blocked by Kevlar, show details
+            # If blocked by Kevlar or Logic, show FRIENDLY message
             if status == "BLOCKED":
                 kevlar_passed = signal.get("kevlar_passed", True)
+                p_score = signal.get("p_score", 0)
+                
+                # Friendly mapping of reasons
+                friendly_reason = reason
+                advice = "Рынок в неопределенности. Рекомендуем проверить актив через 30-60 минут."
+                
+                if "Low Score" in reason:
+                    friendly_reason = f"Низкий P-Score ({p_score}/100). Недостаточно аргументов для входа."
+                elif "No levels" in reason:
+                    friendly_reason = "Цена находится в 'воздухе' между уровнями. Ждем теста поддержки или сопротивления."
+                elif "Kevlar" in reason:
+                    friendly_reason = "Сработала защита Kevlar (фильтр опасных движений)."
+                    advice = "Высокая волатильность или риск 'падающего ножа'. Оставайтесь в стороне."
+                elif "No valid setup" in reason:
+                    friendly_reason = f"Нет четкой структуры. P-Score: {p_score}/100."
+                
                 text = (
-                    f"❌ <b>Сигнал для {ticker} заблокирован</b>\n"
-                    f"🛑 Причина: {reason}\n"
-                    f"🛡 Kevlar: {'PASSED' if kevlar_passed else 'FAILED ❌'}"
+                    f"⏳ <b>СИГНАЛ В ОЖИДАНИИ</b> | {ticker}\n"
+                    f"─────────────────\n"
+                    f"🛑 <b>Причина:</b> {friendly_reason}\n"
+                    f"🛡 <b>Kevlar:</b> {'ПРОЙДЕН ✅' if kevlar_passed else 'БЛОКИРОВАН ❌'}\n\n"
+                    f"💡 <b>Совет:</b> {advice}"
                 )
             else:
                 text = f"⚠️ Ошибка данных для {ticker}\nПроверьте биржу или тикер.\nДетали: {reason}"
