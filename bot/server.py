@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     Config.validate()
     
     # 2. Init DB
-    init_db()
+    await init_db()
     
     logger.info("Server started successfully.")
     yield
@@ -112,8 +112,8 @@ async def webhook_listener(
     data = payload.model_dump()
     data['event_id'] = event_id
     
-    # Save Event (Sync/Fast)
-    is_new = save_event(
+    # Save Event (Async)
+    is_new = await save_event(
         event_id=event_id,
         bar_time=payload.bar_time,
         symbol=payload.symbol,

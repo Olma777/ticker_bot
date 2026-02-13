@@ -154,7 +154,7 @@ async def fetch_open_interest(exchange: ccxt.Exchange, symbol: str) -> float:
         return 0.0
 
 
-def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[dict], List[dict]]:
+def process_levels(df: pd.DataFrame, max_dist_pct: float = Config.MAX_DIST_PCT) -> tuple[List[dict], List[dict]]:
     """
     Process support and resistance levels (Legacy for /sniper).
     Synchronized with Pine Script v3.7 Logic.
@@ -285,7 +285,7 @@ def process_levels(df: pd.DataFrame, max_dist_pct: float = 30.0) -> tuple[List[d
         # Sc = (Wt * Touches) - (Wa * Age/100)
         # Note: Pine has complex reactivity. We approximate.
         
-        score = (WT * touches) - (WA * (age_bars / 100.0))
+        score = (WT * touches) - (WA * age_bars)
         
         # Clamp Score (Pine Script Compatibility)
         score = max(-100.0, min(10.0, score))
@@ -581,7 +581,7 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         df['atr'] = calculate_atr(df)
         df['rsi'] = calculate_rsi(df)
         regime, safety = calculate_global_regime(btc_df)
-        m30_sup, m30_res = process_levels(df, max_dist_pct=30.0)
+        m30_sup, m30_res = process_levels(df, max_dist_pct=Config.MAX_DIST_PCT)
         
         # Data Integrity Checks
         logger.info(f"✅ Current price: ${current_price:.2f}")

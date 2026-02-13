@@ -74,7 +74,7 @@ def get_time_keyboard() -> InlineKeyboardMarkup:
 async def check_and_send_briefings() -> None:
     """Run every hour. Check who needs briefing and send it."""
     current_hour = datetime.now(timezone.utc).hour
-    users_to_send = get_all_users_for_hour(current_hour)
+    users_to_send = await get_all_users_for_hour(current_hour)
     
     if not users_to_send:
         return
@@ -89,7 +89,7 @@ async def check_and_send_briefings() -> None:
                 await bot.send_message(user_id, briefing_text, parse_mode=ParseMode.HTML)
             except Exception as e:
                 logger.error(f"Failed to send to user {user_id}: {e}")
-                delete_user_setting(user_id)
+                await delete_user_setting(user_id)
     except Exception as e:
         logger.error(f"⚠️ Briefing error: {e}")
 
@@ -117,8 +117,8 @@ async def cmd_start(message: Message) -> None:
     """Welcome and onboarding."""
     user_id = message.from_user.id if message.from_user else 0
     
-    if get_user_setting(user_id) is None:
-        set_user_setting(user_id, 9)
+    if await get_user_setting(user_id) is None:
+        await set_user_setting(user_id, 9)
     
     text = (
         "🕶 <b>Market Lens | AI Signals</b>\n\n"
@@ -166,7 +166,7 @@ async def callback_time(callback: CallbackQuery) -> None:
     user_id = callback.from_user.id if callback.from_user else 0
     
     if action == "off":
-        delete_user_setting(user_id)
+        await delete_user_setting(user_id)
         await callback.message.edit_text(
             "🔕 <b>Рассылка отключена.</b>\n"
             "Я больше не буду беспокоить вас по утрам.\n"
@@ -175,7 +175,7 @@ async def callback_time(callback: CallbackQuery) -> None:
         )
     else:
         hour = int(action)
-        set_user_setting(user_id, hour)
+        await set_user_setting(user_id, hour)
         await callback.message.edit_text(
             f"✅ <b>Время установлено!</b>\n"
             f"Я буду готовить для вас отчет каждый день ровно в <b>{hour:02d}:00</b>.",
@@ -412,7 +412,7 @@ async def main() -> None:
     # configure_logging(json_logs=True)  # Already configured globally
     logger.info("bot_started", version="v3.7-alpha1")
     # Initialize database
-    init_db()
+    await init_db()
     
     # Setup scheduler
     scheduler.add_job(check_and_send_briefings, 'cron', minute=0)

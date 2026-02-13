@@ -3,21 +3,20 @@ SQLite database module for webhook event storage.
 Handles event deduplication and persistence.
 """
 
-import sqlite3
+import aiosqlite
 import logging
-from contextlib import contextmanager
 
 from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
 
-def init_db() -> None:
+async def init_db() -> None:
     """Initialize database and create tables."""
     Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    with get_connection() as conn:
-        conn.execute("""
+    async with aiosqlite.connect(Config.DATABASE_URL) as conn:
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id TEXT UNIQUE NOT NULL,
@@ -28,29 +27,19 @@ def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        conn.execute("""
+        await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_events_bar_time 
             ON events(bar_time)
         """)
-        conn.execute("""
+        await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_events_symbol 
             ON events(symbol)
         """)
-        conn.commit()
+        await conn.commit()
     logger.info(f"Database initialized at {Config.DATABASE_URL}")
 
 
-@contextmanager
-def get_connection():
-    """Context manager for database connections."""
-    conn = sqlite3.connect(Config.DATABASE_URL)
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-def save_event(
+async def save_event(
     event_id: str,
     bar_time: int,
     symbol: str,
@@ -63,31 +52,31 @@ def save_event(
     Returns:
         True if new event was inserted, False if duplicate.
     """
-    with get_connection() as conn:
+    async with aiosqlite.connect(Config.DATABASE_URL) as conn:
         try:
-            conn.execute(
+            await conn.execute(
                 """
                 INSERT INTO events (event_id, bar_time, symbol, event_type, payload_json)
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (event_id, bar_time, symbol, event_type, payload_json),
             )
-            conn.commit()
+            await conn.commit()
             logger.info(f"Saved event: {event_id[:16]}... ({symbol} {event_type})")
             return True
-        except sqlite3.IntegrityError:
+        except aiosqlite.IntegrityError:
             # Duplicate event_id
             logger.debug(f"Duplicate event ignored: {event_id[:16]}...")
             return False
 
 
-def get_recent_events(symbol: str = None, limit: int = 50) -> list[dict]:
+async def get_recent_events(symbol: str = None, limit: int = 50) -> list[dict]:
     """Get recent events, optionally filtered by symbol."""
-    with get_connection() as conn:
-        conn.row_factory = sqlite3.Row
+    async with aiosqlite.connect(Config.DATABASE_URL) as conn:
+        conn.row_factory = aiosqlite.Row
         
         if symbol:
-            cursor = conn.execute(
+            async with conn.execute(
                 """
                 SELECT * FROM events 
                 WHERE symbol = ? 
@@ -95,15 +84,17 @@ def get_recent_events(symbol: str = None, limit: int = 50) -> list[dict]:
                 LIMIT ?
                 """,
                 (symbol, limit),
-            )
+            ) as cursor:
+                rows = await cursor.fetchall()
         else:
-            cursor = conn.execute(
+            async with conn.execute(
                 """
                 SELECT * FROM events 
                 ORDER BY bar_time DESC 
                 LIMIT ?
                 """,
                 (limit,),
-            )
+            ) as cursor:
+                rows = await cursor.fetchall()
         
-        return [dict(row) for row in cursor.fetchall()]
+        return [dict(row) for row in rows]

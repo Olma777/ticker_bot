@@ -10,7 +10,9 @@ from bot.config import Config
 from bot.decision_models import (
     DecisionResult, 
     KevlarResult,
-    PScoreResult
+    PScoreResult,
+    MarketContext,
+    SentimentContext
 )
 from bot.market_data import get_market_context
 from bot.sentiment import get_sentiment
@@ -120,12 +122,36 @@ async def process_signal_v2(payload: dict, ctx: DTOContext) -> DecisionResult:
     symbol = payload.get('symbol') or ctx.symbol
     level_price = float(payload.get('level', 0.0))
     event_type = payload.get('event', '')
-    base_score = 50
-    regime_bonus = 10 if ctx.btc_regime == "bullish" else -10 if ctx.btc_regime == "bearish" else 0
-    p_score = max(0, min(100, base_score + regime_bonus))
-    kevlar_res = check_safety_v2(payload, ctx, p_score)
-    decision = "TRADE" if kevlar_res.passed and p_score >= Config.P_SCORE_THRESHOLD else "WAIT"
-    reason = "Valid Setup" if decision == "TRADE" else f"Blocked: {kevlar_res.blocked_by or 'Low Score'}"
+
+    # 1. ADAPTER: Create Contexts from DTO (for P-Score)
+    # We map DTOContext -> MarketContext/SentimentContext dynamically
+    market_adapter = MarketContext(
+        price=ctx.price,
+        atr=ctx.atr,
+        rsi=ctx.rsi,
+        vwap=ctx.vwap or ctx.price, # fallback
+        regime=ctx.btc_regime,
+        candle_open=ctx.candles[-1].open if ctx.candles else ctx.price,
+        candle_high=ctx.candles[-1].high if ctx.candles else ctx.price,
+        candle_low=ctx.candles[-1].low if ctx.candles else ctx.price,
+        candle_close=ctx.candles[-1].close if ctx.candles else ctx.price,
+        data_quality="OK"
+    )
+    sentiment_adapter = SentimentContext(
+        funding=ctx.funding_rate or 0.0,
+        open_interest=float(ctx.open_interest) if ctx.open_interest else 0.0,
+        is_hot=False, # Default to False as we don't have threshold here
+        data_quality="OK"
+    )
+
+    # 2. Calculate P-Score (Full Logic)
+    p_score_res = calculate_score(payload, market_adapter, sentiment_adapter)
+    
+    # 3. Decision & Safety
+    kevlar_res = check_safety_v2(payload, ctx, p_score_res.score)
+    decision = "TRADE" if kevlar_res.passed and p_score_res.score >= Config.P_SCORE_THRESHOLD else "WAIT"
+    reason = "Valid Setup" if decision == "TRADE" else f"Blocked: {kevlar_res.blocked_by or f'Low Score ({p_score_res.score})'}"
+    
     order_plan = None
     if decision == "TRADE":
         side = "LONG" if "SUPPORT" in event_type else "SHORT"

@@ -68,6 +68,21 @@ def _parse_levels(level_str: str, current_price: float) -> List[Dict]:
     return levels
 
 
+
+def _format_price(price: float) -> str:
+    """Adaptive price formatting (Duplicate from analysis.py to avoid circular import)"""
+    if price is None or price == 0:
+        return "$0"
+    abs_price = abs(price)
+    if abs_price < 1.0:
+        return f"${price:.4f}"
+    if abs_price < 100:
+        return f"${price:.2f}"
+    if abs_price >= 10000:
+        return f"${price:,.0f}"
+    return f"${price:,.2f}"
+
+
 def _format_levels_for_display(levels: List[Dict], count: int = 3) -> str:
     """Format INDICATOR levels with proper emoji based on SCORE"""
     if not levels:
@@ -80,7 +95,7 @@ def _format_levels_for_display(levels: List[Dict], count: int = 3) -> str:
             emoji = "🟡"
         else:
             emoji = "🔴"
-        result.append(f"{emoji} ${level['price']:,.2f} (Sc:{level['score']:.1f})")
+        result.append(f"{emoji} {_format_price(level['price'])} (Sc:{level['score']:.1f})")
     return " | ".join(result)
 
 
@@ -565,7 +580,9 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
                     mm_verdict=mm_verdict_lines,
                     liquidity_hunts=liquidity_lines,
                     spoofing_signals=_detect_spoofing_layering(price, vwap, rsi, funding, supports, resistances),
-                    btc_regime=regime
+                    btc_regime=regime,
+                    direction=direction,
+                    entry=entry_level
                 )
         except Exception as e:
             logger.error(f"AI analysis integration failed: {e}")

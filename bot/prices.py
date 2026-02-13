@@ -119,6 +119,10 @@ cache = TieredCache()
 class InvalidPriceError(Exception):
     pass
 
+
+class PriceUnavailableError(Exception):
+    pass
+
 async def _original_fetch_logic(symbol: str) -> float:
     sym = symbol.upper().replace("USDT", "").replace("USD", "")
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -248,8 +252,6 @@ async def get_candles(symbol: str, timeframe: str, limit: int = 100) -> 'pd.Data
 
 
 # --- Price Aggregator with Fallback ---
-class PriceUnavailableError(Exception):
-    pass
 
 class PriceAggregator:
     PROVIDERS = ["binance_futures", "bybit", "okx", "mexc"]

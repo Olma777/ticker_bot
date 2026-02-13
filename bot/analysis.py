@@ -49,20 +49,13 @@ def _format_price(price: float) -> str:
     
     abs_price = abs(price)
     
+    if abs_price < 1.0:
+        return f"${price:.4f}"
+    if abs_price < 100:
+        return f"${price:.2f}"
     if abs_price >= 10000:
         return f"${price:,.0f}"
-    elif abs_price >= 1000:
-        return f"${price:,.2f}"
-    elif abs_price >= 1:
-        return f"${price:.2f}"
-    elif abs_price >= 0.1:
-        return f"${price:.3f}"
-    elif abs_price >= 0.01:
-        return f"${price:.4f}"
-    elif abs_price >= 0.001:
-        return f"${price:.5f}"
-    else:
-        return f"${price:.6f}"
+    return f"${price:,.2f}"
 
 
 async def fetch_ticker_multisource(
@@ -340,23 +333,27 @@ async def _generate_ai_contextual_analysis(
     mm_verdict: list[str],
     liquidity_hunts: list[str],
     spoofing_signals: list[str],
-    btc_regime: str
+    btc_regime: str,
+    direction: str = "WAIT",
+    entry: float = 0.0
 ) -> str:
     """
     ГЛУБОКИЙ СРЕДНЕСРОЧНЫЙ АНАЛИЗ МОНЕТЫ ЧЕРЕЗ OPENAI.
     """
     # 1. Форматирование уровней для промпта
-    sup_formatted = []
+    sup_formatted = []  # FIXED: Initialization
     for l in supports[:5]:
+        if l['score'] < 0: continue # FIXED: Filter negative scores
         emoji = "🟢" if l['score'] >= 3.0 else "🟡" if l['score'] >= 1.0 else "🔴"
         strength = l.get('strength', 'N/A')
-        sup_formatted.append(f"      {emoji} ${l['price']:.2f} (Score: {l['score']:.1f}, {strength})")
+        sup_formatted.append(f"      {emoji} {_format_price(l['price'])} (Score: {l['score']:.1f}, {strength})")
     
     res_formatted = []
     for l in resistances[:5]:
+        if l['score'] < 0: continue # FIXED: Filter negative scores
         emoji = "🟢" if l['score'] >= 3.0 else "🟡" if l['score'] >= 1.0 else "🔴"
         strength = l.get('strength', 'N/A')
-        res_formatted.append(f"      {emoji} ${l['price']:.2f} (Score: {l['score']:.1f}, {strength})")
+        res_formatted.append(f"      {emoji} {_format_price(l['price'])} (Score: {l['score']:.1f}, {strength})")
     
     sup_text = "\n".join(sup_formatted) if sup_formatted else "      • НЕТ АКТИВНЫХ УРОВНЕЙ"
     res_text = "\n".join(res_formatted) if res_formatted else "      • НЕТ АКТИВНЫХ УРОВНЕЙ"
@@ -371,7 +368,7 @@ async def _generate_ai_contextual_analysis(
     prompt = f"""
     Краткий анализ для {ticker} по данным индикатора:
 
-    Цена: ${price:.2f}
+    Цена: {_format_price(price)}
     Фаза MM: {mm_phase}
     Funding: {funding*100:.3f}%
     OI: {oi}
@@ -386,7 +383,7 @@ async def _generate_ai_contextual_analysis(
     1. КЛЮЧЕВЫЕ УРОВНИ: (2 уровня)
     2. ФАЗА РЫНКА: (1 предложение)
     3. ДЕЙСТВИЯ MM: (1 предложение по funding/OI и ликвидности)
-    4. КОНТЕКСТ СИГНАЛА: Объясни, насколько математический сигнал {direction} с входом {entry} согласуется с текущей фазой рынка. НЕ давай свои цены входа/SL/TP - используй только предоставленные данные.
+    4. КОНТЕКСТ СИГНАЛА: Объясни, насколько математический сигнал {direction} с входом {_format_price(entry)} согласуется с текущей фазой рынка. НЕ давай свои цены входа/SL/TP - используй только предоставленные данные.
 
     ТОЛЬКО HTML, БЕЗ Markdown. Кратко, по делу.
 
@@ -743,7 +740,7 @@ def format_signal_html(signal: dict) -> str:
     
     final_text = f"""
 💎 <b>{signal['symbol']}</b> | M30 SNIPER
-💰 ${display_price:,.2f} ({signal.get('change', 0):+.2f}%)
+💰 {_format_price(display_price)} ({signal.get('change', 0):+.2f}%)
 ─────────────────────────
 🎯 P-Score: {signal['p_score']}/100
 🛡️ Kevlar: {'ПРОЙДЕН ✅' if signal.get('kevlar_passed') else 'БЛОКИРОВАН ❌'}
