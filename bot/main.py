@@ -18,7 +18,7 @@ from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import structlog  # Added import
 
-from bot.db import init_db as init_user_db
+from bot.db import init_db as init_user_db, get_user_setting, set_user_setting
 from bot.database import init_db as init_events_db
 
 # ... (rest of imports)
