@@ -542,7 +542,7 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
         # RISKY regime = raise P-Score threshold for entry (soft gate, not hard block)
         min_pscore_for_entry = 35  # default
         if regime_safety == 'RISKY':
-            min_pscore_for_entry = 50  # need stronger signal in risky markets
+            min_pscore_for_entry = 40  # need stronger signal in risky markets
             logger.info(f"⚠️ {ticker}: BTC regime RISKY → P-Score threshold raised to {min_pscore_for_entry}")
 
         # ============ STEP 4: AI DECISION MAKING ============
