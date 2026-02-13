@@ -749,15 +749,15 @@ def format_signal_html(signal: dict) -> str:
         if field not in signal:
             raise ValueError(f"Missing field: {field}")
     
-    # ----- AI CONTEXTUAL ANALYSIS -----
-    ai_analysis = signal.get("ai_analysis", "")
+    # ----- AI CONTEXTUAL ANALYSIS (DISABLED BY AUDITOR REQUEST) -----
+    # ai_analysis = signal.get("ai_analysis", "")
     ai_section = ""
-    if ai_analysis:
-        ai_section = f"""
-─────────────────────────
-🤖 <b>DEEP AI CONTEXT</b>
-{ai_analysis}
-"""
+    # if ai_analysis:
+    #     ai_section = f"""
+    # ─────────────────────────
+    # 🤖 <b>DEEP AI CONTEXT</b>
+    # {ai_analysis}
+    # """
     
     side_emoji = "🟢 LONG" if signal['side'] == 'long' else '🔴 SHORT' if signal['side'] == 'short' else '⚪ WAIT'
     
