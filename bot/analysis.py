@@ -10,132 +10,7 @@ from typing import Optional
 import ccxt.async_support as ccxt
 from openai import AsyncOpenAI
 from aiolimiter import AsyncLimiter
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
-from bot.config import SECTOR_CANDIDATES, EXCHANGE_OPTIONS, RATE_LIMITS, RETRY_ATTEMPTS
-from bot.prices import get_crypto_price
-from bot.indicators import get_technical_indicators
-from bot.cache import TieredCache
-from bot.logger import logger
-from bot.order_calc import validate_signal
-
-logger = logging.getLogger(__name__)
-
-# ===== AI ANALYST INTEGRATION =====
-try:
-    from bot.ai_analyst import get_ai_sniper_analysis
-    AI_ANALYST_AVAILABLE = True
-    logger.info("✓ AI Analyst module loaded successfully")
-except ImportError as e:
-    AI_ANALYST_AVAILABLE = False
-    logger.warning(f"⚠ AI Analyst not available: {e}. Using legacy analysis.")
-
-# --- RATE LIMITER ---
-rate_limiter = AsyncLimiter(RATE_LIMITS.openrouter_requests, RATE_LIMITS.openrouter_period)
-
-# --- CACHE ---
-daily_cache: dict[str, str] = {}
-
-
-# --- HELPER FUNCTIONS ---
-
-def _format_price(price: float) -> str:
-    """
-    Адаптивное форматирование цены для Telegram.
-    Критично для активов < $1 (HBAR, SHIB и т.д.)
-    """
-    if price is None or price == 0:
-        return "$0"
-    
-    abs_price = abs(price)
-    
-    if abs_price >= 10000:
-        return f"${price:,.0f}"
-    elif abs_price >= 1000:
-        return f"${price:,.2f}"
-    elif abs_price >= 1:
-        return f"${price:.2f}"
-    elif abs_price >= 0.1:
-        return f"${price:.3f}"
-    elif abs_price >= 0.01:
-        return f"${price:.4f}"
-    elif abs_price >= 0.001:
-        return f"${price:.5f}"
-    else:
-        return f"${price:.6f}"
-
-
-async def fetch_ticker_multisource(
-    exchanges: dict[str, ccxt.Exchange], 
-    symbol: str
-) -> Optional[dict]:
-    """Fetch ticker from multiple exchanges with fallback."""
-    for name, exchange in exchanges.items():
-        try:
-            ticker = await exchange.fetch_ticker(symbol)
-            if not ticker or ticker['last'] is None:
-                continue
-            return {
-                "price": ticker['last'],
-                "change": ticker['percentage'],
-                "vol": ticker['quoteVolume'] if ticker['quoteVolume'] else 0,
-                "source": name
-            }
-        except Exception:
-            continue
-    return None
-
-
-async def fetch_real_market_data() -> tuple[str, list[str]]:
-    """Fetch real market data from multiple exchanges."""
-    exchanges = {
-        "Binance": ccxt.binance(EXCHANGE_OPTIONS["binance"]),
-        "Bybit": ccxt.bybit(EXCHANGE_OPTIONS["bybit"]),
-        "MEXC": ccxt.mexc(EXCHANGE_OPTIONS["mexc"]),
-        "BingX": ccxt.bingx(EXCHANGE_OPTIONS["bingx"])
-    }
-    market_report = ""
-    valid_tickers_list: list[str] = []
-    
-    try:
-        btc_data = await fetch_ticker_multisource(exchanges, 'BTC/USDT')
-        if btc_data:
-            market_report += f"🛑 GLOBAL BTC: ${btc_data['price']} ({btc_data['change']}%)\n"
-        
-        market_report += "📊 VERIFIED MARKET DATA:\n"
-        for sector, tickers in SECTOR_CANDIDATES.items():
-            market_report += f"--- {sector} ---\n"
-            found_any = False
-            for ticker in tickers:
-                data = await fetch_ticker_multisource(exchanges, ticker)
-                if data:
-                    vol_str = f"${int(data['vol']):,}"
-                    market_report += (
-                        f"ID: {ticker} | Price: {data['price']} | "
-                        f"Change: {data['change']}% | Vol: {vol_str} | Src: {data['source']}\n"
-                    )
-                    valid_tickers_list.append(ticker)
-                    found_any = True
-            if not found_any:
-                market_report += f"(No data for {sector})\n"
-            market_report += "\n"
-    except Exception as e:
-        logger.error(f"Error fetching market data: {e}")
-        market_report += "Error fetching data."
-    finally:
-        for exchange in exchanges.values():
-            await exchange.close()
-    
-    return market_report, valid_tickers_list
-
-
-def _get_openai_client() -> AsyncOpenAI:
-    """Create OpenAI client for OpenRouter."""
-    return AsyncOpenAI(
-        api_key=os.getenv("OPENROUTER_API_KEY"),
-        base_url="https://openrouter.ai/api/v1"
-    )
-
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
 
 # Custom retry filter for 429/500/502/503
 def is_retryable_error(exception):
@@ -144,7 +19,7 @@ def is_retryable_error(exception):
     return False
 
 @retry(
-    retry=retry_if_exception_type(Exception) & retry.retry_if_exception(is_retryable_error),
+    retry=retry_if_exception_type(Exception) & retry_if_exception(is_retryable_error),
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=2, min=4, max=20),
     reraise=True
