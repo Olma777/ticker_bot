@@ -18,7 +18,36 @@ from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import structlog  # Added import
 
-from bot.db import init_db, get_user_setting, set_user_setting, delete_user_setting, get_all_users_for_hour
+from bot.db import init_db as init_user_db
+from bot.database import init_db as init_events_db
+
+# ... (rest of imports)
+
+async def main() -> None:
+    """Main entry point with single-instance lock."""
+    
+    # === SINGLE INSTANCE LOCK (Env Var + File) ===
+    # Railway/Cloud specific check
+    if os.getenv("BOT_INSTANCE_LOCK") == "locked":
+         print("❌ Another instance is already running (Env Lock). Exiting.")
+         sys.exit(1)
+         
+    # File Lock (Local dev)
+    lock_file = "/tmp/marketlens-bot.lock"
+    try:
+        fd = os.open(lock_file, os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, BlockingIOError):
+        print("❌ Another instance is already running (File Lock). Exiting.")
+        sys.exit(1)
+    # ==============================
+
+    # configure_logging(json_logs=True)  # Already configured globally
+    logger.info("bot_started", version="v3.7.1-HOTFIX")
+    
+    # Initialize databases
+    await init_user_db()
+    await init_events_db() # Fix: Initialize events table
 from bot.prices import get_crypto_price, get_market_summary
 from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan, format_signal_html
 from bot.validators import SymbolNormalizer, InvalidSymbolError
