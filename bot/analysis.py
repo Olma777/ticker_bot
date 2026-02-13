@@ -424,7 +424,6 @@ async def get_sniper_analysis(ticker: str, language: str = "ru") -> dict:
         }
     
     try:
-        # LEGACY: logger.info(f"🎯 AI Analyst processing: {ticker}")
         start_ts = datetime.now(timezone.utc)
         signal = await get_ai_sniper_analysis(ticker)
         latency = (datetime.now(timezone.utc) - start_ts).total_seconds() * 1000
@@ -689,6 +688,7 @@ def format_signal_html(signal: dict) -> str:
             filtered_verdict.append(line)
     
     mm_text = "\n".join(filtered_verdict) if filtered_verdict else "• Нет дополнительных сигналов"
+    mm_text = _clean_telegram_html(mm_text)
     
     # ----- DEDUPLICATED LIQUIDITY -----
     liquidity_all = signal.get("liquidity_hunts", [])
@@ -706,18 +706,19 @@ def format_signal_html(signal: dict) -> str:
             seen_patterns.add(pattern)
             
     liquidity_text = "\n".join(unique_liquidity) if unique_liquidity else "• Нет явных зон охоты"
+    liquidity_text = _clean_telegram_html(liquidity_text)
     
-    # ----- SPOOFING -----
     spoofing = signal.get("spoofing_signals", [])
     spoofing_text = "\n".join(spoofing) if spoofing else "• Нет признаков манипуляции"
+    spoofing_text = _clean_telegram_html(spoofing_text)
     
     # ----- LEVELS (ПОКАЗЫВАЕМ ВСЕ, С ИКОНКАМИ) -----
-    strong_supports = signal.get("strong_supports", "НЕТ")
-    strong_resists = signal.get("strong_resists", "НЕТ")
+    strong_supports = _clean_telegram_html(str(signal.get("strong_supports", "НЕТ")))
+    strong_resists = _clean_telegram_html(str(signal.get("strong_resists", "НЕТ")))
     
     # ----- LOGIC -----
-    logic_setup = signal.get("logic_setup", "No logic")
-    logic_summary = signal.get("logic_summary", "No summary")
+    logic_setup = _clean_telegram_html(str(signal.get("logic_setup", "No logic")))
+    logic_summary = _clean_telegram_html(str(signal.get("logic_summary", "No summary")))
     
     # ----- RRR CALCULATION -----
     # Already calc above

@@ -49,7 +49,7 @@ async def main() -> None:
     await init_user_db()
     await init_events_db() # Fix: Initialize events table
 from bot.prices import get_crypto_price, get_market_summary
-from bot.utils import encrypt_string, decrypt_string, batch_process
+from bot.utils import batch_process
 from bot.analysis import get_crypto_analysis, get_sniper_analysis, get_daily_briefing, get_market_scan, format_signal_html, format_signal_plain
 from bot.validators import SymbolNormalizer, InvalidSymbolError
 from bot.prices import PriceUnavailableError
