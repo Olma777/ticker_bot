@@ -3,6 +3,7 @@ Market Lens Telegram Bot - Main Entry Point
 """
 
 import asyncio
+import html as html_mod
 # import logging  # Removed to avoid conflict with structlog
 import sys
 import os
@@ -301,15 +302,21 @@ async def cmd_sniper(message: Message) -> None:
                 elif "No valid setup" in reason:
                     friendly_reason = f"Нет четкой структуры. P-Score: {p_score}/100."
                 
+                # CRITICAL: Escape ALL dynamic content for Telegram HTML
+                safe_ticker = html_mod.escape(str(ticker))
+                safe_reason = html_mod.escape(str(friendly_reason))
+                safe_advice = html_mod.escape(str(advice))
+                
                 text = (
-                    f"⏳ <b>СИГНАЛ В ОЖИДАНИИ</b> | {ticker}\n"
+                    f"⏳ <b>СИГНАЛ В ОЖИДАНИИ</b> | {safe_ticker}\n"
                     f"─────────────────\n"
-                    f"🛑 <b>Причина:</b> {friendly_reason}\n"
+                    f"🛑 <b>Причина:</b> {safe_reason}\n"
                     f"🛡 <b>Kevlar:</b> {'ПРОЙДЕН ✅' if kevlar_passed else 'БЛОКИРОВАН ❌'}\n\n"
-                    f"💡 <b>Совет:</b> {advice}"
+                    f"💡 <b>Совет:</b> {safe_advice}"
                 )
             else:
-                text = f"⚠️ Ошибка данных для {ticker}\nПроверьте биржу или тикер.\nДетали: {reason}"
+                safe_reason = html_mod.escape(str(reason))
+                text = f"⚠️ Ошибка данных для {html_mod.escape(ticker)}\nПроверьте биржу или тикер.\nДетали: {safe_reason}"
                 
             await message.answer(text, parse_mode=ParseMode.HTML)
             return
