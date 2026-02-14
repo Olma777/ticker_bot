@@ -1,404 +1,405 @@
-# Market Lens Bot — Technical Whitepaper v1.0
+# Market Lens Bot — Технический Whitepaper v1.0
 
-**Version:** Alpha 3 • **Date:** February 2026 • **Classification:** Confidential
-
----
-
-## 1. Executive Summary
-
-Market Lens is an **automated technical analysis system** for cryptocurrency perpetual futures.
-The system receives real-time price level alerts from TradingView, enriches them with on-chain and order book data, applies a multi-layer safety pipeline, and generates actionable trade setups (Entry, Stop-Loss, Take-Profit) with strict risk management.
-
-**Key characteristics:**
-- Deterministic signal pipeline — identical inputs always produce identical outputs
-- 5-layer Kevlar safety system — blocks dangerous entries before they happen
-- ATR-based order math — all levels calculated from market volatility, not fixed offsets
-- 1% risk per trade — hardcoded capital preservation
+**Версия:** Alpha 3 • **Дата:** Февраль 2026 • **Классификация:** Конфиденциально
 
 ---
 
-## 2. System Architecture
+## 1. Краткое описание
+
+Market Lens — **автоматизированная система технического анализа** для криптовалютных бессрочных фьючерсов (Perpetual Futures).
+
+Система получает оповещения об уровнях в реальном времени из TradingView, обогащает их данными с бирж (ценовые свечи, объёмы, фандинг), прогоняет через многоуровневую систему безопасности и генерирует торговые сетапы (Вход, Стоп-лосс, Тейк-профит) с жёстким управлением рисками.
+
+**Ключевые характеристики:**
+- **Детерминированный пайплайн** — одинаковые входные данные всегда дают одинаковый результат
+- **5-уровневая система безопасности Kevlar** — блокирует опасные входы до их совершения
+- **ATR-расчёт ордеров** — все уровни рассчитываются из рыночной волатильности, не из фиксированных значений
+- **Риск 1% на сделку** — жёсткая защита капитала
+
+---
+
+## 2. Архитектура системы
 
 ```
                         ┌──────────────────┐
                         │   TradingView    │
                         │  Pine Script v3.7│
                         └────────┬─────────┘
-                                 │ Webhook (HTTPS + HMAC)
+                                 │ Вебхук (HTTPS + HMAC)
                         ┌────────▼─────────┐
-                        │   FastAPI Server  │
+                        │   FastAPI Сервер  │
                         │   (server.py)     │
                         └────────┬─────────┘
-                                 │ Background Task
+                                 │ Фоновая задача
               ┌──────────────────▼──────────────────┐
-              │         Decision Engine              │
+              │         Движок принятия решений      │
               │       (decision_engine.py)           │
               └──┬──────────┬──────────┬──────────┬──┘
                  │          │          │          │
           ┌──────▼──┐  ┌───▼───┐  ┌───▼───┐  ┌──▼───────┐
-          │Indicators│  │P-Score│  │ Kevlar│  │Order Calc│
-          │(.py)     │  │(.py)  │  │(.py)  │  │(.py)     │
+          │Индикаторы│  │P-Score│  │ Kevlar│  │ Расчёт   │
+          │(.py)     │  │(.py)  │  │(.py)  │  │ ордеров  │
           └──────────┘  └───────┘  └───────┘  └──────────┘
                  │
           ┌──────▼──────┐
-          │ AI Analyst   │
+          │  AI Аналитик │
           │(ai_analyst.py│
           └──────┬──────┘
                  │
           ┌──────▼──────┐
           │  Telegram    │
-          │  Notifier    │
+          │  Уведомления │
           └─────────────┘
 ```
 
-### 2.1 Data Flow
+### 2.1 Поток данных
 
-| Step | Module | Function | Description |
-|------|--------|----------|-------------|
-| 1 | `server.py` | `webhook_listener` | Receives TradingView alert, validates HMAC signature |
-| 2 | `server.py` | `generate_event_id` | SHA-256 deduplication prevents double processing |
-| 3 | `decision_engine.py` | `process_signal` | Orchestrates analysis pipeline |
-| 4 | `indicators.py` | `run_full_analysis` | Fetches OHLCV, calculates S/R levels, ATR, RSI, VWAP |
-| 5 | `pscore.py` | `calculate_score` | Computes probability score (0-100) |
-| 6 | `kevlar.py` | `check_safety_v2` | 5-layer safety filter |
-| 7 | `ai_analyst.py` | `get_ai_sniper_analysis` | Direction decision + order generation |
-| 8 | `order_calc.py` | `build_order_plan` | Deterministic Entry/SL/TP calculation |
-| 9 | `notifier.py` | `send_card` | Formats and sends to Telegram |
+| Шаг | Модуль | Функция | Описание |
+|-----|--------|---------|----------|
+| 1 | `server.py` | `webhook_listener` | Приём алерта TradingView, проверка HMAC-подписи |
+| 2 | `server.py` | `generate_event_id` | SHA-256 дедупликация — предотвращает двойную обработку |
+| 3 | `decision_engine.py` | `process_signal` | Оркестрация аналитического пайплайна |
+| 4 | `indicators.py` | `run_full_analysis` | Загрузка OHLCV, расчёт уровней, ATR, RSI, VWAP |
+| 5 | `pscore.py` | `calculate_score` | Расчёт вероятностного скора (0–100) |
+| 6 | `kevlar.py` | `check_safety_v2` | 5-уровневый фильтр безопасности |
+| 7 | `ai_analyst.py` | `get_ai_sniper_analysis` | Определение направления + генерация ордера |
+| 8 | `order_calc.py` | `build_order_plan` | Детерминированный расчёт Entry/SL/TP |
+| 9 | `notifier.py` | `send_card` | Форматирование и отправка в Telegram |
 
-### 2.2 Infrastructure
+### 2.2 Инфраструктура
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Runtime | Python 3.11 | Core language |
-| Web Server | FastAPI + Uvicorn | Webhook receiver |
-| Hosting | Railway | Cloud deployment |
-| Data Source | CCXT (Binance, Bybit, OKX, +3) | Price aggregation |
-| Alerts | TradingView Pine Script v3.7 | Level detection |
-| Notifications | Telegram Bot API | Signal delivery |
-| Database | SQLite (aiosqlite) | Event deduplication |
+| Компонент | Технология | Назначение |
+|-----------|-----------|------------|
+| Среда выполнения | Python 3.11 | Основной язык |
+| Веб-сервер | FastAPI + Uvicorn | Приём вебхуков |
+| Хостинг | Railway | Облачный деплой |
+| Источник данных | CCXT (Binance, Bybit, OKX, +3) | Агрегация цен |
+| Алерты | TradingView Pine Script v3.7 | Детектирование уровней |
+| Уведомления | Telegram Bot API | Доставка сигналов |
+| База данных | SQLite (aiosqlite) | Дедупликация событий |
 
 ---
 
-## 3. Signal Generation Pipeline
+## 3. Пайплайн генерации сигнала
 
-### 3.1 Pine Script v3.7 — Level Detection (TradingView)
+### 3.1 Pine Script v3.7 — Детектирование уровней (TradingView)
 
-The TradingView indicator runs on 30-minute charts and detects **Support** and **Resistance** levels using the following algorithm:
+Индикатор TradingView работает на 30-минутных графиках и определяет уровни **Поддержки** и **Сопротивления** по следующему алгоритму:
 
 ```
-Parameters (Locked):
-  React Bars    = 24
-  K_React       = 1.3
-  Merge ATR     = 0.6
-  Wt (Touches)  = 1.0
-  Wa (Age Decay)= 0.35
-  T_min         = 5
-  ATR Length     = 14
+Параметры (зафиксированы):
+  React Bars        = 24        (количество баров для реакции)
+  K_React           = 1.3       (коэффициент реакции)
+  Merge ATR         = 0.6       (порог слияния уровней)
+  Wt (Вес тачей)    = 1.0       (вес за каждое касание)
+  Wa (Затухание)    = 0.35      (штраф за возраст уровня)
+  T_min             = 5         (минимальный возраст уровня)
+  ATR Length         = 14       (период ATR)
 ```
 
-**Level Score formula:**
+**Формула Score уровня:**
 ```
 Score = Wt × Touches − Wa × Age
 ```
 
-Where:
-- **Touches** = number of times price tested the level
-- **Age** = bars since level was first detected
-- **Score ≥ 3.0** → Strong level (🟢)
-- **Score ≥ 1.0** → Medium level (🟡)
-- **Score < 1.0** → Weak level
+Где:
+- **Touches** — количество касаний цены данного уровня
+- **Age** — количество баров с момента формирования уровня
+- **Score ≥ 3.0** → Сильный уровень (🟢)
+- **Score ≥ 1.0** → Средний уровень (🟡)
+- **Score < 1.0** → Слабый уровень
 
-When price tests a level, TradingView sends a webhook to the server.
+Когда цена тестирует уровень, TradingView отправляет вебхук на сервер.
 
-### 3.2 Local Level Calculation (Fallback)
+### 3.2 Локальный расчёт уровней (резервный)
 
-When TradingView data is unavailable (e.g. manual `/sniper` command), the system calculates levels locally from OHLCV data using the same algorithm:
+Когда данные TradingView недоступны (например, ручная команда `/sniper`), система рассчитывает уровни локально из OHLCV данных по тому же алгоритму:
 
-1. **Pivot detection** — Identifies swing highs/lows from 30m candles
-2. **Level merging** — Clusters nearby pivots within `0.6 × ATR` distance
-3. **Scoring** — Applies `Score = Wt × Touches − Wa × Age`
-4. **Filtering** — Removes levels with `Score < -100` (ghost levels)
+1. **Детектирование пивотов** — определение локальных максимумов/минимумов на 30-минутных свечах
+2. **Слияние уровней** — кластеризация близких пивотов в пределах `0.6 × ATR`
+3. **Скоринг** — применение формулы `Score = Wt × Touches − Wa × Age`
+4. **Фильтрация** — удаление уровней со `Score < −100` (уровни-призраки)
 
-> **Note:** Local levels have negative scores by design because they lack the touch-count enrichment from real-time TradingView data. The system uses them as positional references, not quality indicators.
+> **Примечание:** Локально рассчитанные уровни имеют отрицательные Score по дизайну, так как не получают данные о касаниях из реального времени TradingView. Система использует их как позиционные ориентиры, а не как гарантию качества.
 
 ---
 
-## 4. Probability Score (P-Score)
+## 4. Вероятностный скор (P-Score)
 
-P-Score is a **0-100 composite metric** estimating the probability of a successful trade.
+P-Score — **составная метрика от 0 до 100**, оценивающая вероятность успешной сделки.
 
-### 4.1 Calculation
+### 4.1 Расчёт
 
-| Factor | Condition | Impact |
-|--------|-----------|--------|
-| **Base** | — | 50 |
-| **Level Strength** | Score ≥ 1.0 (Strong) | +15 |
-| | Score < 0 (Weak) | −20 |
-| | Score 0–1 (Medium) | 0 |
-| **BTC Regime** | EXPANSION (trending up) | +10 |
-| | COMPRESSION (high z-score) | −10 |
+| Фактор | Условие | Влияние |
+|--------|---------|---------|
+| **База** | — | 50 |
+| **Сила уровня** | Score ≥ 1.0 (Сильный) | +15 |
+| | Score < 0 (Слабый) | −20 |
+| | Score 0–1 (Средний) | 0 |
+| **Режим BTC** | EXPANSION (рост) | +10 |
+| | COMPRESSION (высокий z-score) | −10 |
 | | NEUTRAL | 0 |
-| **RSI Context** | RSI < 35 at Support (oversold) | +5 |
-| | RSI > 65 at Resistance (overbought) | +5 |
-| **Sentiment** | High Open Interest (HOT) | +10 |
-| | Low Open Interest (COLD) | −5 |
+| **Контекст RSI** | RSI < 35 у поддержки (перепроданность) | +5 |
+| | RSI > 65 у сопротивления (перекупленность) | +5 |
+| **Сентимент** | Высокий Open Interest (HOT) | +10 |
+| | Низкий Open Interest (COLD) | −5 |
 
-**Hard gate:** `P-Score < 35` → signal blocked, no trade generated.
+**Жёсткий порог:** `P-Score < 35` → сигнал заблокирован, сделка не генерируется.
 
-### 4.2 BTC Regime Detection
+### 4.2 Детектирование режима BTC
 
-The system monitors BTC's 30-period Rate of Change to determine the global regime:
+Система мониторит 30-периодный Rate of Change (темп изменения) BTC для определения глобального режима:
 
-```python
-z_score = (ROC - mean(ROC, 180)) / std(ROC, 180)
+```
+z_score = (ROC − mean(ROC, 180)) / std(ROC, 180)
 
-if z_score > 1.25  → COMPRESSION (RISKY)
-if z_score < -1.25 → EXPANSION (SAFE)
-else               → NEUTRAL (SAFE)
+если z_score > 1.25  → COMPRESSION (RISKY)
+если z_score < −1.25 → EXPANSION (SAFE)
+иначе               → NEUTRAL (SAFE)
 ```
 
-When regime is **RISKY**, the minimum P-Score threshold is raised from 35 to 40 (soft gate, not hard block).
+Когда режим **RISKY**, минимальный порог P-Score поднимается с 35 до 40 (мягкий гейт, не жёсткая блокировка).
 
 ---
 
-## 5. Kevlar Safety System
+## 5. Система безопасности Kevlar
 
-Kevlar is a **5-layer cascading filter** that blocks dangerous entries. Each filter runs sequentially; any failure immediately blocks the trade.
+Kevlar — **5-уровневый каскадный фильтр**, блокирующий опасные входы. Каждый фильтр выполняется последовательно; любой провал немедленно блокирует сделку.
 
-### 5.1 Filter Chain
+### 5.1 Цепочка фильтров
 
-| Filter | Name | Logic | Purpose |
-|--------|------|-------|---------|
-| **K0** | Data Integrity | `ATR = 0 ∨ Price = 0 ∨ Candles < 5` | Prevents trading on bad data |
-| **K1** | Level Distance | `|Price − Level| / Price > 15%` | Blocks stale/irrelevant levels |
-| **K2** | Momentum (Falling Knife) | `Close[0]/Close[5] − 1 < −5%` at Support | Prevents buying into crashes |
-| **K2B** | Short Squeeze | `Close[0]/Close[5] − 1 > +5%` at Resistance | Prevents shorting into squeezes |
-| **K3** | RSI Panic/FOMO | `RSI < 20 ∧ P-Score < 50` or `RSI > 80 ∧ P-Score < 50` | Blocks emotional entries |
-| **K4** | Sentiment Trap | LONG with `Funding > 0.03%` and `Price < VWAP` | Blocks contrarian traps |
+| Фильтр | Название | Логика | Назначение |
+|--------|----------|--------|-----------|
+| **K0** | Целостность данных | `ATR = 0 ∨ Price = 0 ∨ Свечей < 5` | Запрет торговли на плохих данных |
+| **K1** | Дистанция до уровня | `|Цена − Уровень| / Цена > 15%` | Блокировка устаревших уровней |
+| **K2** | Моментум (Падающий нож) | `Close[0]/Close[5] − 1 < −5%` у поддержки | Запрет покупки во время обвала |
+| **K2B** | Шорт-сквиз | `Close[0]/Close[5] − 1 > +5%` у сопротивления | Запрет шорта во время разгона |
+| **K3** | RSI Паника/FOMO | `RSI < 20 ∧ P-Score < 50` или `RSI > 80 ∧ P-Score < 50` | Блокировка эмоциональных входов |
+| **K4** | Ловушка сентимента | LONG при `Фандинг > 0.03%` и `Цена < VWAP` | Блокировка контртрендовых ловушек |
 
-### 5.2 Anti-Trap Mechanism (STEP 4B)
+### 5.2 Механизм Anti-Trap (ШАГ 4B)
 
-An additional filter after direction selection:
+Дополнительный фильтр после выбора направления:
 
-- If **LONG** and price is within **0.3%** of a strong resistance (Score ≥ 3.0) → BLOCK
-- If **SHORT** and price is within **0.3%** of a strong support (Score ≥ 3.0) → BLOCK
+- Если **LONG** и цена в пределах **0.3%** от сильного сопротивления (Score ≥ 3.0) → БЛОК
+- Если **SHORT** и цена в пределах **0.3%** от сильной поддержки (Score ≥ 3.0) → БЛОК
 
-This prevents entries that are technically valid but practically about to reverse.
-
----
-
-## 6. Order Calculation Module
-
-### 6.1 Deterministic Math
-
-All order parameters are calculated from a single function `build_order_plan()` with zero randomness:
-
-```
-Input:  Side, Level, ATR, Capital, Risk%
-Output: Entry, SL, TP1, TP2, TP3, Size, RRR
-```
-
-### 6.2 Formulas
-
-| Parameter | LONG | SHORT |
-|-----------|------|-------|
-| **Entry** | Level (limit order) | Level (limit order) |
-| **Stop-Loss** | Entry − 1.0 × ATR | Entry + 1.0 × ATR |
-| **TP1** | Entry + 0.75 × ATR | Entry − 0.75 × ATR |
-| **TP2** | Entry + 1.25 × ATR | Entry − 1.25 × ATR |
-| **TP3** | Entry + 2.0 × ATR | Entry − 2.0 × ATR |
-
-### 6.3 Position Sizing
-
-```
-Risk Amount = Capital × (Risk% / 100)
-             = $1,000 × 0.01 = $10
-
-Stop Distance = |Entry − SL| = 1.0 × ATR
-
-Size = Risk / Stop Distance
-```
-
-### 6.4 Sanity Gates
-
-| Check | Condition | Result |
-|-------|-----------|--------|
-| Zero stop distance | `|Entry − SL| = 0` | Trade blocked |
-| Zero position size | `Size ≤ 0` | Trade blocked |
-| Low RRR | `RRR(TP2) < 1.10` | Trade blocked |
-| High funding cost | `Funding > 0.5%` and `RRR < 1.30` | Trade blocked |
+Это предотвращает входы, которые технически валидны, но практически находятся в точке разворота.
 
 ---
 
-## 7. AI Analysis Layer
+## 6. Модуль расчёта ордеров
 
-### 7.1 Smart Money Phase Detection
+### 6.1 Детерминированная математика
 
-The system classifies market phase based on price action relative to VWAP and RSI:
+Все параметры ордера рассчитываются одной функцией `build_order_plan()` с нулевой рандомизацией:
 
-| Phase | Conditions | Meaning |
-|-------|-----------|---------|
-| **ACCUMULATION** 🟢 | Price < VWAP, RSI < 40, negative funding | Large players buying quietly |
-| **DISTRIBUTION** 🔴 | Price > VWAP, RSI > 60, positive funding | Large players selling to retail |
-| **NEUTRAL** ⚪ | Mixed signals | No clear institutional bias |
+```
+Вход:   Сторона, Уровень, ATR, Капитал, Риск%
+Выход:  Entry, SL, TP1, TP2, TP3, Размер, RRR
+```
 
-### 7.2 Liquidity Analysis
+### 6.2 Формулы
 
-The system estimates **stop-loss clusters** based on recent swing points and ATR:
+| Параметр | LONG (покупка) | SHORT (продажа) |
+|----------|---------------|-----------------|
+| **Вход** | Уровень (лимитный ордер) | Уровень (лимитный ордер) |
+| **Стоп-лосс** | Вход − 1.0 × ATR | Вход + 1.0 × ATR |
+| **TP1** | Вход + 0.75 × ATR | Вход − 0.75 × ATR |
+| **TP2** | Вход + 1.25 × ATR | Вход − 1.25 × ATR |
+| **TP3** | Вход + 2.0 × ATR | Вход − 2.0 × ATR |
 
-- **Long stops** are projected below the nearest support
-- **Short stops** are projected above the nearest resistance
-- **Hunt probability** is assessed based on distance from current price
+### 6.3 Размер позиции
 
-### 7.3 Market Maker Behavior Analysis
+```
+Сумма риска = Капитал × (Риск% / 100)
+            = $1,000 × 0.01 = $10
 
-Detects potential spoofing and manipulation patterns through:
-- Price vs VWAP divergence
-- RSI vs Price divergence
-- Funding rate anomalies
+Дистанция стопа = |Вход − SL| = 1.0 × ATR
+
+Размер позиции = Риск / Дистанция стопа
+```
+
+### 6.4 Защитные проверки
+
+| Проверка | Условие | Результат |
+|----------|---------|-----------|
+| Нулевой стоп | `|Вход − SL| = 0` | Сделка заблокирована |
+| Нулевой размер | `Размер ≤ 0` | Сделка заблокирована |
+| Низкий RRR | `RRR(TP2) < 1.10` | Сделка заблокирована |
+| Дорогой фандинг | `Фандинг > 0.5%` и `RRR < 1.30` | Сделка заблокирована |
 
 ---
 
-## 8. Security Architecture
+## 7. Слой AI-анализа
 
-### 8.1 Webhook Authentication
+### 7.1 Определение фазы Smart Money
 
-All incoming webhooks are validated with **HMAC comparison** in constant time:
+Система классифицирует рыночную фазу на основе ценового действия относительно VWAP и RSI:
+
+| Фаза | Условия | Интерпретация |
+|------|---------|--------------|
+| **ACCUMULATION** 🟢 | Цена < VWAP, RSI < 40, отрицательный фандинг | Крупные игроки тихо скупают |
+| **DISTRIBUTION** 🔴 | Цена > VWAP, RSI > 60, положительный фандинг | Крупные игроки продают ритейлу |
+| **NEUTRAL** ⚪ | Смешанные сигналы | Нет чёткого институционального перевеса |
+
+### 7.2 Анализ ликвидности
+
+Система оценивает **кластеры стоп-лоссов** на основе последних свинг-поинтов и ATR:
+
+- **Стопы лонгистов** — проецируются ниже ближайшей поддержки
+- **Стопы шортистов** — проецируются выше ближайшего сопротивления
+- **Вероятность охоты** — оценивается по расстоянию от текущей цены
+
+### 7.3 Анализ поведения маркет-мейкера
+
+Детектирование потенциального спуфинга и манипуляций через:
+- Расхождение Цены и VWAP
+- Дивергенция RSI и Цены
+- Аномалии ставки фандинга
+
+---
+
+## 8. Архитектура безопасности
+
+### 8.1 Аутентификация вебхуков
+
+Все входящие вебхуки валидируются **HMAC-сравнением** в постоянном времени:
 
 ```python
 hmac.compare_digest(x_ml_secret, Config.WEBHOOK_SECRET)
 ```
 
-Failed authentication returns `HTTP 401` with no data leakage.
+Неудачная аутентификация возвращает `HTTP 401` без утечки данных.
 
-### 8.2 Event Deduplication
+### 8.2 Дедупликация событий
 
-Each event generates a **deterministic SHA-256 ID**:
+Каждое событие генерирует **детерминированный SHA-256 идентификатор**:
 
 ```
-ID = SHA256(SYMBOL | TF | BAR_TIME | EVENT | LEVEL | ZONE_HALF)
+ID = SHA256(СИМВОЛ | ТФ | ВРЕМЯ_БАРА | СОБЫТИЕ | УРОВЕНЬ | ЗОНА)
 ```
 
-Duplicate events are ignored (database uniqueness constraint).
+Дублирующие события игнорируются (ограничение уникальности в базе данных).
 
-### 8.3 Input Validation
+### 8.3 Валидация входных данных
 
-- Pydantic models enforce strict typing on all webhook fields
-- `bar_time` must be a Unix timestamp post-2020
-- Symbol normalization handles all input formats (APE, APEUSDT, APE/USDT)
-- All numeric inputs validated for NaN, inf, and zero division
+- Модели Pydantic обеспечивают строгую типизацию всех полей вебхука
+- `bar_time` должен быть Unix-таймстемпом после 2020 года
+- Нормализация символов обрабатывает все форматы ввода (APE, APEUSDT, APE/USDT)
+- Все числовые входы валидируются на NaN, бесконечность и деление на ноль
 
-### 8.4 Credential Management
+### 8.4 Управление учётными данными
 
-| Credential | Storage | Purpose |
-|-----------|---------|---------|
-| `WEBHOOK_SECRET` | Environment variable | Webhook authentication |
-| `TELEGRAM_TOKEN` | Environment variable | Bot communication |
-| `OPENROUTER_API_KEY` | Environment variable | AI analysis (optional) |
+| Учётные данные | Хранение | Назначение |
+|----------------|----------|-----------|
+| `WEBHOOK_SECRET` | Переменная окружения | Аутентификация вебхуков |
+| `TELEGRAM_TOKEN` | Переменная окружения | Коммуникация бота |
+| `OPENROUTER_API_KEY` | Переменная окружения | AI-анализ (опционально) |
 
-Server **fails to start** if `WEBHOOK_SECRET` is missing or set to default.
+Сервер **не запускается**, если `WEBHOOK_SECRET` отсутствует или установлен в значение по умолчанию.
 
 ---
 
-## 9. Risk Management Summary
+## 9. Управление рисками — сводка
 
-### 9.1 Capital Protection Layers
+### 9.1 Уровни защиты капитала
 
 ```
-Layer 1: P-Score Gate       — Blocks weak setups (< 35/100)
-Layer 2: BTC Regime         — Raises threshold in volatile markets
-Layer 3: Kevlar (5 filters) — Blocks dangerous market conditions
-Layer 4: Anti-Trap          — Blocks entries near opposing levels
-Layer 5: Entry Validation   — Validates level proximity and direction
-Layer 6: Order Math         — Enforces minimum RRR (1.10x)
-Layer 7: Funding Check      — Blocks trades with expensive holding costs
+Уровень 1: Гейт P-Score         — блокирует слабые сетапы (< 35/100)
+Уровень 2: Режим BTC            — повышает порог при волатильном рынке
+Уровень 3: Kevlar (5 фильтров)  — блокирует опасные рыночные условия
+Уровень 4: Anti-Trap             — блокирует входы у противоположных уровней
+Уровень 5: Валидация входа       — проверяет близость к уровню и направление
+Уровень 6: Математика ордера     — гарантирует минимальный RRR (1.10x)
+Уровень 7: Проверка фандинга     — блокирует сделки с дорогим удержанием
 ```
 
-### 9.2 Worst-Case Scenario
+### 9.2 Наихудший сценарий
 
-| Parameter | Value |
-|-----------|-------|
-| Max risk per trade | 1% of capital |
-| Max drawdown per trade | $10 on $1,000 account |
-| Entry type | Limit only (no market orders) |
-| Stop-loss | Always present, ATR-based |
-| Max simultaneous trades | 1 per ticker (dedup) |
+| Параметр | Значение |
+|----------|----------|
+| Максимальный риск на сделку | 1% от капитала |
+| Максимальная просадка на сделку | $10 при счёте $1,000 |
+| Тип входа | Только лимитный (без рыночных ордеров) |
+| Стоп-лосс | Всегда присутствует, рассчитан от ATR |
+| Максимум одновременных сделок | 1 на тикер (дедупликация) |
 
 ---
 
-## 10. Supported Assets
+## 10. Поддерживаемые активы
 
-The system supports **any USDT-perpetual contract** available on supported exchanges.
+Система поддерживает **любой USDT-бессрочный контракт**, доступный на поддерживаемых биржах.
 
-### Pre-configured Sectors
+### Настроенные секторы
 
-| Sector | Assets |
+| Сектор | Активы |
 |--------|--------|
 | **AI** | FET, RENDER, WLD, ARKM, GRT, NEAR |
 | **RWA** | ONDO, PENDLE, OM, TRU, DUSK |
 | **L2** | OP, ARB, POL, METIS, MANTA, STRK |
 | **DePIN** | FIL, AR, IOTX, THETA, HBAR |
 
-### Supported Exchanges (Price Aggregation)
+### Поддерживаемые биржи (агрегация цен)
 
-| Priority | Exchange | Type |
-|----------|----------|------|
-| 1 | Binance | Futures |
-| 2 | Bybit | Linear |
-| 3 | OKX | Swap |
-| 4 | MEXC | Swap |
-| 5 | BingX | Swap |
-| 6 | Gate.io | Futures |
+| Приоритет | Биржа | Тип |
+|-----------|-------|-----|
+| 1 | Binance | Фьючерсы |
+| 2 | Bybit | Линейные контракты |
+| 3 | OKX | Свопы |
+| 4 | MEXC | Свопы |
+| 5 | BingX | Свопы |
+| 6 | Gate.io | Фьючерсы |
 
-The system queries exchanges in priority order and uses the first successful response. This provides **redundancy** — if Binance is down, the system continues via Bybit.
+Система опрашивает биржи в порядке приоритета и использует первый успешный ответ. Это обеспечивает **отказоустойчивость** — если Binance недоступен, система продолжает работу через Bybit.
 
 ---
 
-## 11. Configuration Parameters (Locked)
+## 11. Параметры конфигурации (зафиксированы)
 
-All parameters are synchronized with Pine Script v3.7 and frozen in `config.py`:
+Все параметры синхронизированы с Pine Script v3.7 и заморожены в `config.py`:
 
-| Parameter | Value | Source |
-|-----------|-------|--------|
-| Timeframe | 30m | Pine v3.7 |
-| ATR Length | 14 | Pine v3.7 |
+| Параметр | Значение | Источник |
+|----------|----------|----------|
+| Таймфрейм | 30m | Pine v3.7 |
+| Период ATR | 14 | Pine v3.7 |
 | React Bars | 24 | Pine v3.7 |
 | K_React | 1.3 | Pine v3.7 |
 | Merge ATR | 0.6 | Pine v3.7 |
-| Wt (Touch Weight) | 1.0 | Pine v3.7 |
-| Wa (Age Decay) | 0.35 | Pine v3.7 |
-| Z-Score Window | 180 | Pine v3.7 |
-| Z-Score Threshold | 1.25 | Pine v3.7 |
-| P-Score Threshold | 35 | Calibrated |
-| Funding Threshold | 0.03% | Calibrated |
-| SL Multiplier | 1.0 × ATR | User Spec |
-| TP1 Multiplier | 0.75 × ATR | User Spec |
-| TP2 Multiplier | 1.25 × ATR | User Spec |
-| TP3 Multiplier | 2.0 × ATR | User Spec |
-| Min RRR | 1.10 | User Spec |
-| Default Capital | $1,000 | Config |
-| Risk per Trade | 1% | Config |
+| Wt (Вес касания) | 1.0 | Pine v3.7 |
+| Wa (Затухание возраста) | 0.35 | Pine v3.7 |
+| Окно Z-Score | 180 | Pine v3.7 |
+| Порог Z-Score | 1.25 | Pine v3.7 |
+| Порог P-Score | 35 | Калибровка |
+| Порог фандинга | 0.03% | Калибровка |
+| Множитель SL | 1.0 × ATR | Спецификация |
+| Множитель TP1 | 0.75 × ATR | Спецификация |
+| Множитель TP2 | 1.25 × ATR | Спецификация |
+| Множитель TP3 | 2.0 × ATR | Спецификация |
+| Минимальный RRR | 1.10 | Спецификация |
+| Стандартный капитал | $1,000 | Конфиг |
+| Риск на сделку | 1% | Конфиг |
 
 ---
 
-## 12. Glossary
+## 12. Глоссарий
 
-| Term | Definition |
-|------|-----------|
-| **ATR** | Average True Range — measure of market volatility over 14 periods |
-| **VWAP** | Volume-Weighted Average Price — institutional fair value |
-| **RSI** | Relative Strength Index (0-100). <30 = oversold, >70 = overbought |
-| **P-Score** | Probability Score (0-100) — composite signal strength metric |
-| **Kevlar** | Multi-layer safety filter system named for durability |
-| **RRR** | Risk-to-Reward Ratio — potential profit / potential loss |
-| **Funding Rate** | 8-hourly fee for holding perpetual futures positions |
-| **S/R Level** | Support or Resistance — price zone where price likely reverses |
-| **Score** | Level quality metric: positive = strong (confirmed), negative = weak |
-| **HMAC** | Hash-based Message Authentication Code — webhook security |
-| **Pine Script** | TradingView's programming language for indicators |
+| Термин | Определение |
+|--------|-----------|
+| **ATR** | Average True Range — мера рыночной волатильности за 14 периодов |
+| **VWAP** | Volume-Weighted Average Price — средневзвешенная цена по объёму, институциональная «справедливая цена» |
+| **RSI** | Relative Strength Index (0–100). <30 = перепроданность, >70 = перекупленность |
+| **P-Score** | Probability Score (0–100) — составная метрика силы сигнала |
+| **Kevlar** | Многоуровневая система фильтров безопасности |
+| **RRR** | Risk-to-Reward Ratio — отношение потенциальной прибыли к потенциальному убытку |
+| **Фандинг** | 8-часовая комиссия за удержание бессрочных фьючерсных позиций |
+| **S/R уровень** | Support / Resistance — ценовая зона, от которой цена с высокой вероятностью развернётся |
+| **Score** | Метрика качества уровня: положительный = сильный (подтверждённый), отрицательный = слабый |
+| **HMAC** | Hash-based Message Authentication Code — криптографическая проверка подлинности вебхуков |
+| **Pine Script** | Язык программирования TradingView для создания индикаторов |
+| **OHLCV** | Open, High, Low, Close, Volume — стандартный формат ценовых свечей |
 
 ---
 
-*Document generated: February 14, 2026*
-*System version: Alpha 3 (commit 7ec8047)*
-*Contact: [Project Maintainer]*
+*Документ сформирован: 14 февраля 2026*
+*Версия системы: Alpha 3 (коммит 7ec8047)*
