@@ -74,18 +74,24 @@ def _parse_levels(level_str: str, current_price: float) -> List[Dict]:
 
 
 def _format_levels_for_display(levels: List[Dict], count: int = 3) -> str:
-    """Format INDICATOR levels with proper emoji based on SCORE"""
+    """Format INDICATOR levels with proper emoji based on SCORE.
+    Webhook levels have high positive scores (1-10+).
+    Local levels have negative scores (-100 to 0). Use neutral icon for those.
+    """
     if not levels:
         return "НЕТ"
     result = []
     for level in levels[:count]:
-        if level['score'] >= 3.0:
-            emoji = "🟢"
-        elif level['score'] >= 1.0:
-            emoji = "🟡"
+        sc = level.get('score', 0)
+        if sc >= 3.0:
+            emoji = "🟢"  # Strong (webhook confirmed)
+        elif sc >= 1.0:
+            emoji = "🟡"  # Medium
+        elif sc >= -2.0:
+            emoji = "⚪"  # Neutral / locally calculated
         else:
-            emoji = "🔴"
-        result.append(f"{emoji} {_format_price(level['price'])} (Sc:{level['score']:.1f})")
+            emoji = "🔴"  # Weak
+        result.append(f"{emoji} {_format_price(level['price'])} (Sc:{sc:.1f})")
     return " | ".join(result)
 
 
@@ -784,7 +790,7 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             "ai_analysis": ai_analysis,
             
             # Logic
-            "logic_setup": f"Setup found: {direction} from {entry_level}",
+            "logic_setup": f"Setup found: {direction} from {_format_price(entry_level)}",
             "logic_summary": mm_verdict_lines[0].lstrip("• ").strip() if mm_verdict_lines else "Market Neutral",
             
             "rsi": rsi,

@@ -669,9 +669,9 @@ async def get_technical_indicators(ticker: str) -> Optional[dict[str, Any]]:
         change_str = f"{((current_price - price_24h) / price_24h) * 100:+.2f}"
         funding_fmt = f"{funding_rate*100:+.3f}%"
         
-        # Icon helper
+        # Icon helper (webhook: high scores, local: negative)
         def icon(sc: float) -> str:
-            return "🟢" if sc >= 1.0 else "🟡" if sc > -2.0 else "🔴"
+            return "🟢" if sc >= 3.0 else "🟡" if sc >= 1.0 else "⚪" if sc >= -2.0 else "🔴"
         
         def fmt_lvls(lvls: List[dict]) -> str:
             if not lvls:
