@@ -546,58 +546,92 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             logger.info(f"⚠️ {ticker}: BTC regime RISKY → P-Score threshold raised to {min_pscore_for_entry}")
 
         # ============ STEP 4: AI DECISION MAKING ============
-        strong_supports = [l for l in supports if l.get('score', 0) >= 1.0]
-        strong_resists = [l for l in resistances if l.get('score', 0) >= 1.0]
+        # Use ALL available levels — don't hard-filter by score
+        # Score is informational (webhook levels have high scores, local have negative — but both are valid)
         
         # DIAGNOSTIC LOGGING
-        sup_info = [f"${l['price']}(Sc:{l.get('score',0)})" for l in supports]
-        res_info = [f"${l['price']}(Sc:{l.get('score',0)})" for l in resistances]
-        logger.info(f"📊 {ticker} STEP 4: p_score={p_score}, min_threshold={min_pscore_for_entry}")
-        logger.info(f"   All supports: {sup_info}")
-        logger.info(f"   All resists:  {res_info}")
-        logger.info(f"   Strong SUP (score>=1): {len(strong_supports)}, Strong RES: {len(strong_resists)}")
+        sup_info = [f"${l['price']}(Sc:{l.get('score',0):.1f})" for l in supports]
+        res_info = [f"${l['price']}(Sc:{l.get('score',0):.1f})" for l in resistances]
+        logger.info(f"📊 {ticker} STEP 4: p_score={p_score}, min_threshold={min_pscore_for_entry}, price=${price}")
+        logger.info(f"   Supports: {sup_info}")
+        logger.info(f"   Resists:  {res_info}")
+        
+        # Strategy side hint from get_intraday_strategy
+        strat = indicators.get('strategy', {})
+        strat_side = strat.get('side', 'NEUTRAL')
+        strat_action = strat.get('action', 'WAIT')
+        logger.info(f"   Strategy hint: side={strat_side}, action={strat_action}")
         
         if p_score >= min_pscore_for_entry:
-            # Check supports (LONG candidates)
-            if strong_supports:
-                best_support = min(strong_supports, key=lambda x: abs(x['price'] - price))
-                dist = abs(price - best_support['price']) / price
-                logger.info(f"   Best SUP: ${best_support['price']} dist={dist*100:.1f}% (max 3%)")
-                if dist <= 0.03:  # 3% margin
+            # Find nearest support below price
+            sups_below = [l for l in supports if l['price'] < price]
+            if sups_below:
+                best_support = min(sups_below, key=lambda x: abs(x['price'] - price))
+                sup_dist = (price - best_support['price']) / price
+            else:
+                best_support = None
+                sup_dist = 999
+            
+            # Find nearest resistance above price
+            ress_above = [l for l in resistances if l['price'] > price]
+            if ress_above:
+                best_resist = min(ress_above, key=lambda x: abs(x['price'] - price))
+                res_dist = (best_resist['price'] - price) / price
+            else:
+                best_resist = None
+                res_dist = 999
+            
+            sup_label = f"${best_support['price']}" if best_support else "NONE"
+            res_label = f"${best_resist['price']}" if best_resist else "NONE"
+            logger.info(f"   Nearest SUP: {sup_label} @ {sup_dist*100:.1f}%")
+            logger.info(f"   Nearest RES: {res_label} @ {res_dist*100:.1f}%")
+            
+            # Decision: closer to support → LONG, closer to resistance → SHORT
+            max_dist = 0.05  # 5% maximum distance to consider a level
+            
+            if sup_dist < res_dist and sup_dist <= max_dist and best_support:
+                direction = "LONG"
+                entry_level = best_support['price']
+                logger.info(f"   → LONG from SUP ${entry_level} (dist {sup_dist*100:.1f}%)")
+            elif res_dist <= sup_dist and res_dist <= max_dist and best_resist:
+                direction = "SHORT"
+                entry_level = best_resist['price']
+                logger.info(f"   → SHORT from RES ${entry_level} (dist {res_dist*100:.1f}%)")
+            elif strat_side in ("LONG", "SHORT") and strat_action == "TRADE":
+                # Use strategy hint as fallback
+                if strat_side == "LONG" and best_support and sup_dist <= max_dist:
                     direction = "LONG"
                     entry_level = best_support['price']
-            # Check resistances (SHORT candidates)
-            if direction == "WAIT" and strong_resists:
-                best_resist = min(strong_resists, key=lambda x: abs(x['price'] - price))
-                dist = abs(price - best_resist['price']) / price
-                logger.info(f"   Best RES: ${best_resist['price']} dist={dist*100:.1f}% (max 3%)")
-                if dist <= 0.03:  # 3% margin
+                elif strat_side == "SHORT" and best_resist and res_dist <= max_dist:
                     direction = "SHORT"
                     entry_level = best_resist['price']
+                logger.info(f"   → {direction} from strategy hint")
             
             if direction == "WAIT":
-                logger.warning(f"   ❌ No level within 3% despite P-Score OK")
+                logger.warning(f"   ❌ No level within {max_dist*100:.0f}%")
         else:
             logger.info(f"   ❌ P-Score {p_score} < {min_pscore_for_entry} → skipping level scan")
         
-        # ============ STEP 4B: ANTI-TRAP (LONG at resistance / SHORT at support) ============
+        # ============ STEP 4B: ANTI-TRAP (only block if VERY close to opposite level) ============
+        # More lenient: only block if within 0.3% of opposite strong level (webhook levels score > 3)
+        strong_resists = [l for l in resistances if l.get('score', 0) >= 3.0]
+        strong_supports = [l for l in supports if l.get('score', 0) >= 3.0]
+        
         if direction == "LONG" and strong_resists:
             nearest_res = min(strong_resists, key=lambda x: abs(x['price'] - price))
-            # Block LONG if price is within 1% of strong resistance
-            if nearest_res['price'] > price and (nearest_res['price'] - price) / price < 0.01:
-                logger.warning(f"⚠️ ANTI-TRAP: LONG blocked — price {price} too close to RES {nearest_res['price']} (Sc:{nearest_res['score']})")
+            if nearest_res['price'] > price and (nearest_res['price'] - price) / price < 0.003:
+                logger.warning(f"⚠️ ANTI-TRAP: LONG blocked — price too close to STRONG RES {nearest_res['price']}")
                 direction = "WAIT"
                 entry_level = 0.0
         
         if direction == "SHORT" and strong_supports:
             nearest_sup = min(strong_supports, key=lambda x: abs(x['price'] - price))
-            # Block SHORT if price is within 1% of strong support
-            if nearest_sup['price'] < price and (price - nearest_sup['price']) / price < 0.01:
-                logger.warning(f"⚠️ ANTI-TRAP: SHORT blocked — price {price} too close to SUP {nearest_sup['price']} (Sc:{nearest_sup['score']})")
+            if nearest_sup['price'] < price and (price - nearest_sup['price']) / price < 0.003:
+                logger.warning(f"⚠️ ANTI-TRAP: SHORT blocked — price too close to STRONG SUP {nearest_sup['price']}")
                 direction = "WAIT"
                 entry_level = 0.0
         
-        logger.info(f"   DECISION: {direction} entry={entry_level}")
+        logger.info(f"   FINAL DECISION: {direction} entry={entry_level}")
 
         # ============ STEP 5: KEVLAR CHECK (after levels for accurate distance) ============
         strat = indicators.get('strategy', {})
@@ -669,13 +703,13 @@ async def get_ai_sniper_analysis(ticker: str) -> Dict:
             reasons = []
             if p_score < min_pscore_for_entry:
                 reasons.append(f"P-Score {p_score} < {min_pscore_for_entry}")
-            if not strong_supports and not strong_resists:
-                reasons.append("No strong levels (score >= 1.0)")
-            elif strong_supports or strong_resists:
-                all_strong = strong_supports + strong_resists
-                nearest = min(all_strong, key=lambda x: abs(x['price'] - price))
+            all_levels = supports + resistances
+            if not all_levels:
+                reasons.append("No levels found")
+            else:
+                nearest = min(all_levels, key=lambda x: abs(x['price'] - price))
                 d = abs(nearest['price'] - price) / price * 100
-                reasons.append(f"Nearest strong level ${nearest['price']:.4f} @ {d:.1f}% (max 3%)")
+                reasons.append(f"Nearest level ${nearest['price']:.4f} @ {d:.1f}% (max 5%)")
             
             detail = "; ".join(reasons) if reasons else "Unknown"
             logger.warning(f"⛔ {ticker} NO TRADE: {detail}")
