@@ -382,16 +382,11 @@ def validate_entry_for_any_ticker(
 ) -> Tuple[bool, str]:
     """
     Universal entry validation for any ticker (BTC, SHIB, etc.).
-    Checks for Air Entry, Direction mismatch, and Weak Levels.
+    Checks for Air Entry and Direction mismatch.
+    Score check REMOVED — local levels have negative scores by design.
     """
     if direction == "WAIT" or entry == 0:
         return False, "No entry signal"
-
-    # 1. Price vs Entry Sanity
-    # dist = abs(entry - price)
-    # limit = atr * 2.0
-    # if dist > limit:
-    #    return False, f"Entry {entry} too far from price {price}"
 
     # 2. Direction vs Level Type & Proximity
     if direction == "LONG":
@@ -401,14 +396,10 @@ def validate_entry_for_any_ticker(
         
         nearest = min(supports, key=lambda x: abs(x['price'] - entry))
         
-        # Rule: < 1% Distance from Level (Air Entry Protection)
+        # Rule: < 5% Distance from Level (Air Entry Protection)
         dist_pct = abs(entry - nearest['price']) / entry
-        if dist_pct > 0.01:
-             return False, f"Air Entry: Too far from support ({dist_pct*100:.2f}% > 1%)"
-             
-        # Check Score
-        if nearest.get('score', 0) < 1.0:
-             return False, f"Weak Support Level (Score {nearest.get('score', 0):.1f})"
+        if dist_pct > 0.05:
+             return False, f"Air Entry: Too far from support ({dist_pct*100:.2f}% > 5%)"
 
     elif direction == "SHORT":
         # Entry must be near a RESISTANCE level
@@ -417,14 +408,10 @@ def validate_entry_for_any_ticker(
             
         nearest = min(resistances, key=lambda x: abs(x['price'] - entry))
         
-        # Rule: < 1% Distance from Level
+        # Rule: < 5% Distance from Level
         dist_pct = abs(entry - nearest['price']) / entry
-        if dist_pct > 0.01:
-             return False, f"Air Entry: Too far from resistance ({dist_pct*100:.2f}% > 1%)"
-
-        # Check Score
-        if nearest.get('score', 0) < 1.0:
-             return False, f"Weak Resistance Level (Score {nearest.get('score', 0):.1f})"
+        if dist_pct > 0.05:
+             return False, f"Air Entry: Too far from resistance ({dist_pct*100:.2f}% > 5%)"
 
     return True, "Valid"
 
